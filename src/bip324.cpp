@@ -8,21 +8,19 @@
 #include <crypto/chacha20.h>
 #include <crypto/chacha20poly1305.h>
 #include <crypto/hkdf_sha256_32.h>
+#include <key.h>
+#include <pubkey.h>
 #include <random.h>
 #include <span.h>
 #include <support/cleanse.h>
+#include <uint256.h>
 
 #include <algorithm>
 #include <assert.h>
 #include <cstdint>
 #include <cstddef>
-
-BIP324Cipher::BIP324Cipher() noexcept
-{
-    m_key.MakeNewKey(true);
-    uint256 entropy = GetRandHash();
-    m_our_pubkey = m_key.EllSwiftCreate(MakeByteSpan(entropy));
-}
+#include <iterator>
+#include <string>
 
 BIP324Cipher::BIP324Cipher(const CKey& key, Span<const std::byte> ent32) noexcept :
     m_key(key)

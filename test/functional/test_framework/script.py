@@ -10,7 +10,6 @@ This file is modified from python-bitcoinlib.
 from collections import namedtuple
 import struct
 import unittest
-from typing import List, Dict
 
 from .key import TaggedHash, tweak_add_pubkey, compute_xonly_pubkey
 
@@ -24,7 +23,7 @@ from .messages import (
     uint256_from_str,
 )
 
-from .ripemd160 import ripemd160
+from .crypto.ripemd160 import ripemd160
 
 MAX_SCRIPT_ELEMENT_SIZE = 520
 MAX_PUBKEYS_PER_MULTI_A = 999
@@ -110,8 +109,8 @@ class CScriptOp(int):
             _opcode_instances.append(super().__new__(cls, n))
             return _opcode_instances[n]
 
-OPCODE_NAMES: Dict[CScriptOp, str] = {}
-_opcode_instances: List[CScriptOp] = []
+OPCODE_NAMES: dict[CScriptOp, str] = {}
+_opcode_instances: list[CScriptOp] = []
 
 # Populate opcode instance table
 for n in range(0xff + 1):
@@ -484,7 +483,7 @@ class CScript(bytes):
         i = 0
         while i < len(self):
             sop_idx = i
-            opcode = self[i]
+            opcode = CScriptOp(self[i])
             i += 1
 
             if opcode > OP_PUSHDATA4:
@@ -591,7 +590,7 @@ class CScript(bytes):
                 n += 1
             elif opcode in (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY):
                 if fAccurate and (OP_1 <= lastOpcode <= OP_16):
-                    n += opcode.decode_op_n()
+                    n += lastOpcode.decode_op_n()
                 else:
                     n += 20
             lastOpcode = opcode
@@ -699,6 +698,15 @@ def sign_input_legacy(tx, input_index, input_scriptpubkey, privkey, sighash_type
     tx.vin[input_index].scriptSig = bytes(CScript([der_sig + bytes([sighash_type])])) + tx.vin[input_index].scriptSig
     tx.rehash()
 
+def sign_input_segwitv0(tx, input_index, input_scriptpubkey, input_amount, privkey, sighash_type=SIGHASH_ALL):
+    """Add segwitv0 ECDSA signature for a given transaction input. Note that the signature
+       is inserted at the bottom of the witness stack, i.e. additional witness data
+       needed (e.g. pubkey for P2WPKH) can already be set before."""
+    sighash = SegwitV0SignatureHash(input_scriptpubkey, tx, input_index, sighash_type, input_amount)
+    der_sig = privkey.sign_ecdsa(sighash)
+    tx.wit.vtxinwit[input_index].scriptWitness.stack.insert(0, der_sig + bytes([sighash_type]))
+    tx.rehash()
+
 # TODO: Allow cached hashPrevouts/hashSequence/hashOutputs to be provided.
 # Performance optimization probably not necessary for python tests, however.
 # Note that this corresponds to sigversion == 1 in EvalScript, which is used
@@ -739,7 +747,7 @@ def SegwitV0SignatureMsg(script, txTo, inIdx, hashtype, amount):
     ss += struct.pack("<q", amount)
     ss += struct.pack("<I", txTo.vin[inIdx].nSequence)
     ss += ser_uint256(hashOutputs)
-    ss += struct.pack("<i", txTo.nLockTime)
+    ss += txTo.nLockTime.to_bytes(4, "little")
     ss += struct.pack("<I", hashtype)
     return ss
 
@@ -773,6 +781,20 @@ class TestFrameworkScript(unittest.TestCase):
         values = [0, 1, -1, -2, 127, 128, -255, 256, (1 << 15) - 1, -(1 << 16), (1 << 24) - 1, (1 << 31), 1 - (1 << 32), 1 << 40, 1500, -1500]
         for value in values:
             self.assertEqual(CScriptNum.decode(CScriptNum.encode(CScriptNum(value))), value)
+
+    def test_legacy_sigopcount(self):
+        # test repeated single sig ops
+        for n_ops in range(1, 100, 10):
+            for singlesig_op in (OP_CHECKSIG, OP_CHECKSIGVERIFY):
+                singlesigs_script = CScript([singlesig_op]*n_ops)
+                self.assertEqual(singlesigs_script.GetSigOpCount(fAccurate=False), n_ops)
+                self.assertEqual(singlesigs_script.GetSigOpCount(fAccurate=True), n_ops)
+        # test multisig op (including accurate counting, i.e. BIP16)
+        for n in range(1, 16+1):
+            for multisig_op in (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY):
+                multisig_script = CScript([CScriptOp.encode_op_n(n), multisig_op])
+                self.assertEqual(multisig_script.GetSigOpCount(fAccurate=False), 20)
+                self.assertEqual(multisig_script.GetSigOpCount(fAccurate=True), n)
 
 def BIP341_sha_prevouts(txTo):
     return sha256(b"".join(i.prevout.serialize() for i in txTo.vin))

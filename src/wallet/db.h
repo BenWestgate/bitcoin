@@ -20,7 +20,12 @@ class ArgsManager;
 struct bilingual_str;
 
 namespace wallet {
-void SplitWalletPath(const fs::path& wallet_path, fs::path& env_directory, std::string& database_filename);
+// BytePrefix compares equality with other byte spans that begin with the same prefix.
+struct BytePrefix {
+    Span<const std::byte> prefix;
+};
+bool operator<(BytePrefix a, Span<const std::byte> b);
+bool operator<(Span<const std::byte> a, BytePrefix b);
 
 class DatabaseCursor
 {
@@ -67,7 +72,7 @@ public:
         ssKey.reserve(1000);
         ssKey << key;
 
-        CDataStream ssValue(SER_DISK, CLIENT_VERSION);
+        DataStream ssValue{};
         if (!ReadKey(std::move(ssKey), ssValue)) return false;
         try {
             ssValue >> value;
@@ -84,7 +89,7 @@ public:
         ssKey.reserve(1000);
         ssKey << key;
 
-        CDataStream ssValue(SER_DISK, CLIENT_VERSION);
+        DataStream ssValue{};
         ssValue.reserve(10000);
         ssValue << value;
 
@@ -178,6 +183,8 @@ public:
 enum class DatabaseFormat {
     BERKELEY,
     SQLITE,
+    BERKELEY_RO,
+    BERKELEY_SWAP,
 };
 
 struct DatabaseOptions {

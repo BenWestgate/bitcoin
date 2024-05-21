@@ -11,9 +11,7 @@
 #include <thread>
 #include <vector>
 
-#if defined(HAVE_CONFIG_H)
-#include <config/bitcoin-config.h>
-#endif
+#include <config/bitcoin-config.h> // IWYU pragma: keep
 
 #include <boost/test/unit_test.hpp>
 
@@ -40,7 +38,7 @@ std::set<std::string> RenameEnMasse(int num_threads)
 
     threads.reserve(num_threads);
     for (int i = 0; i < num_threads; ++i) {
-        threads.push_back(std::thread(RenameThisThread, i));
+        threads.emplace_back(RenameThisThread, i);
     }
 
     for (std::thread& thread : threads) thread.join();

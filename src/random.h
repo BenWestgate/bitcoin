@@ -11,6 +11,7 @@
 #include <span.h>
 #include <uint256.h>
 
+#include <bit>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -175,9 +176,9 @@ public:
     uint64_t rand64() noexcept
     {
         if (requires_seed) RandomSeed();
-        unsigned char buf[8];
-        rng.Keystream(buf, 8);
-        return ReadLE64(buf);
+        std::array<std::byte, 8> buf;
+        rng.Keystream(buf);
+        return ReadLE64(UCharCast(buf.data()));
     }
 
     /** Generate a random (bits)-bit integer. */
@@ -203,7 +204,7 @@ public:
     {
         assert(range);
         --range;
-        int bits = CountBits(range);
+        int bits = std::bit_width(range);
         while (true) {
             uint64_t ret = randbits(bits);
             if (ret <= range) return ret;

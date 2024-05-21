@@ -17,6 +17,7 @@
 #include <interfaces/node.h>
 #include <interfaces/wallet.h>
 #include <kernel/chain.h>
+#include <kernel/context.h>
 #include <kernel/mempool_entry.h>
 #include <logging.h>
 #include <mapport.h>
@@ -28,6 +29,7 @@
 #include <node/coin.h>
 #include <node/context.h>
 #include <node/interface_ui.h>
+#include <node/mini_miner.h>
 #include <node/transaction.h>
 #include <policy/feerate.h>
 #include <policy/fees.h>
@@ -38,21 +40,21 @@
 #include <primitives/transaction.h>
 #include <rpc/protocol.h>
 #include <rpc/server.h>
-#include <shutdown.h>
 #include <support/allocators/secure.h>
 #include <sync.h>
 #include <txmempool.h>
 #include <uint256.h>
 #include <univalue.h>
 #include <util/check.h>
+#include <util/result.h>
+#include <util/signalinterrupt.h>
+#include <util/string.h>
 #include <util/translation.h>
 #include <validation.h>
 #include <validationinterface.h>
 #include <warnings.h>
 
-#if defined(HAVE_CONFIG_H)
-#include <config/bitcoin-config.h>
-#endif
+#include <config/bitcoin-config.h> // IWYU pragma: keep
 
 #include <any>
 #include <memory>
@@ -89,7 +91,7 @@ public:
     explicit NodeImpl(NodeContext& context) { setContext(&context); }
     void initLogging() override { InitLogging(args()); }
     void initParameterInteraction() override { InitParameterInteraction(args()); }
-    bilingual_str getWarnings() override { return GetWarnings(true); }
+    bilingual_str getWarnings() override { return Join(GetWarnings(), Untranslated("<hr />")); }
     int getExitStatus() override { return Assert(m_context)->exit_status.load(); }
     uint32_t getLogCategories() override { return LogInstance().GetCategoryMask(); }
     bool baseInitialize() override
@@ -98,6 +100,7 @@ public:
         if (!AppInitParameterInteraction(args())) return false;
 
         m_context->kernel = std::make_unique<kernel::Context>();
+        m_context->ecc_context = std::make_unique<ECC_Context>();
         if (!AppInitSanityChecks(*m_context->kernel)) return false;
 
         if (!AppInitLockDataDirectory()) return false;
@@ -119,14 +122,16 @@ public:
     }
     void startShutdown() override
     {
-        StartShutdown();
+        if (!(*Assert(Assert(m_context)->shutdown))()) {
+            LogPrintf("Error: failed to send shutdown signal\n");
+        }
         // Stop RPC for clean shutdown if any of waitfor* commands is executed.
         if (args().GetBoolArg("-server", false)) {
             InterruptRPC();
             StopRPC();
         }
     }
-    bool shutdownRequested() override { return ShutdownRequested(); }
+    bool shutdownRequested() override { return ShutdownRequested(*Assert(m_context)); };
     bool isSettingIgnored(const std::string& name) override
     {
         bool ignored = false;
@@ -298,8 +303,9 @@ public:
     {
         return GuessVerificationProgress(chainman().GetParams().TxData(), WITH_LOCK(::cs_main, return chainman().ActiveChain().Tip()));
     }
-    bool isInitialBlockDownload() override {
-        return chainman().ActiveChainstate().IsInitialBlockDownload();
+    bool isInitialBlockDownload() override
+    {
+        return chainman().IsInitialBlockDownload();
     }
     bool isLoadingBlocks() override { return chainman().m_blockman.LoadingBlocks(); }
     void setNetworkActive(bool active) override
@@ -312,7 +318,7 @@ public:
     CFeeRate getDustRelayFee() override
     {
         if (!m_context->mempool) return CFeeRate{DUST_RELAY_TX_FEE};
-        return m_context->mempool->m_dust_relay_feerate;
+        return m_context->mempool->m_opts.dust_relay_feerate;
     }
     UniValue executeRpc(const std::string& command, const UniValue& params, const std::string& uri) override
     {
@@ -326,10 +332,12 @@ public:
     std::vector<std::string> listRpcCommands() override { return ::tableRPC.listCommands(); }
     void rpcSetTimerInterfaceIfUnset(RPCTimerInterface* iface) override { RPCSetTimerInterfaceIfUnset(iface); }
     void rpcUnsetTimerInterface(RPCTimerInterface* iface) override { RPCUnsetTimerInterface(iface); }
-    bool getUnspentOutput(const COutPoint& output, Coin& coin) override
+    std::optional<Coin> getUnspentOutput(const COutPoint& output) override
     {
         LOCK(::cs_main);
-        return chainman().ActiveChainstate().CoinsTip().GetCoin(output, coin);
+        Coin coin;
+        if (chainman().ActiveChainstate().CoinsTip().GetCoin(output, coin)) return coin;
+        return {};
     }
     TransactionError broadcastTransaction(CTransactionRef tx, CAmount max_tx_fee, std::string& err_string) override
     {
@@ -399,6 +407,7 @@ public:
     NodeContext* m_context{nullptr};
 };
 
+// NOLINTNEXTLINE(misc-no-recursion)
 bool FillBlock(const CBlockIndex* index, const FoundBlock& block, UniqueLock<RecursiveMutex>& lock, const CChain& active, const BlockManager& blockman)
 {
     if (!index) return false;
@@ -424,17 +433,17 @@ public:
     explicit NotificationsProxy(std::shared_ptr<Chain::Notifications> notifications)
         : m_notifications(std::move(notifications)) {}
     virtual ~NotificationsProxy() = default;
-    void TransactionAddedToMempool(const CTransactionRef& tx, uint64_t mempool_sequence) override
+    void TransactionAddedToMempool(const NewMempoolTransactionInfo& tx, uint64_t mempool_sequence) override
     {
-        m_notifications->transactionAddedToMempool(tx);
+        m_notifications->transactionAddedToMempool(tx.info.m_tx);
     }
     void TransactionRemovedFromMempool(const CTransactionRef& tx, MemPoolRemovalReason reason, uint64_t mempool_sequence) override
     {
         m_notifications->transactionRemovedFromMempool(tx, reason);
     }
-    void BlockConnected(const std::shared_ptr<const CBlock>& block, const CBlockIndex* index) override
+    void BlockConnected(ChainstateRole role, const std::shared_ptr<const CBlock>& block, const CBlockIndex* index) override
     {
-        m_notifications->blockConnected(kernel::MakeBlockInfo(index, block.get()));
+        m_notifications->blockConnected(role, kernel::MakeBlockInfo(index, block.get()));
     }
     void BlockDisconnected(const std::shared_ptr<const CBlock>& block, const CBlockIndex* index) override
     {
@@ -444,26 +453,29 @@ public:
     {
         m_notifications->updatedBlockTip();
     }
-    void ChainStateFlushed(const CBlockLocator& locator) override { m_notifications->chainStateFlushed(locator); }
+    void ChainStateFlushed(ChainstateRole role, const CBlockLocator& locator) override {
+        m_notifications->chainStateFlushed(role, locator);
+    }
     std::shared_ptr<Chain::Notifications> m_notifications;
 };
 
 class NotificationsHandlerImpl : public Handler
 {
 public:
-    explicit NotificationsHandlerImpl(std::shared_ptr<Chain::Notifications> notifications)
-        : m_proxy(std::make_shared<NotificationsProxy>(std::move(notifications)))
+    explicit NotificationsHandlerImpl(ValidationSignals& signals, std::shared_ptr<Chain::Notifications> notifications)
+        : m_signals{signals}, m_proxy{std::make_shared<NotificationsProxy>(std::move(notifications))}
     {
-        RegisterSharedValidationInterface(m_proxy);
+        m_signals.RegisterSharedValidationInterface(m_proxy);
     }
     ~NotificationsHandlerImpl() override { disconnect(); }
     void disconnect() override
     {
         if (m_proxy) {
-            UnregisterSharedValidationInterface(m_proxy);
+            m_signals.UnregisterSharedValidationInterface(m_proxy);
             m_proxy.reset();
         }
     }
+    ValidationSignals& m_signals;
     std::shared_ptr<NotificationsProxy> m_proxy;
 };
 
@@ -644,8 +656,9 @@ public:
     {
         if (!m_node.mempool) return false;
         LOCK(m_node.mempool->cs);
-        auto it = m_node.mempool->GetIter(txid);
-        return it && (*it)->GetCountWithDescendants() > 1;
+        const auto entry{m_node.mempool->GetEntry(Txid::FromUint256(txid))};
+        if (entry == nullptr) return false;
+        return entry->GetCountWithDescendants() > 1;
     }
     bool broadcastTransaction(const CTransactionRef& tx,
         const CAmount& max_tx_fee,
@@ -664,23 +677,42 @@ public:
         if (!m_node.mempool) return;
         m_node.mempool->GetTransactionAncestry(txid, ancestors, descendants, ancestorsize, ancestorfees);
     }
+
+    std::map<COutPoint, CAmount> calculateIndividualBumpFees(const std::vector<COutPoint>& outpoints, const CFeeRate& target_feerate) override
+    {
+        if (!m_node.mempool) {
+            std::map<COutPoint, CAmount> bump_fees;
+            for (const auto& outpoint : outpoints) {
+                bump_fees.emplace(outpoint, 0);
+            }
+            return bump_fees;
+        }
+        return MiniMiner(*m_node.mempool, outpoints).CalculateBumpFees(target_feerate);
+    }
+
+    std::optional<CAmount> calculateCombinedBumpFee(const std::vector<COutPoint>& outpoints, const CFeeRate& target_feerate) override
+    {
+        if (!m_node.mempool) {
+            return 0;
+        }
+        return MiniMiner(*m_node.mempool, outpoints).CalculateTotalBumpFees(target_feerate);
+    }
     void getPackageLimits(unsigned int& limit_ancestor_count, unsigned int& limit_descendant_count) override
     {
         const CTxMemPool::Limits default_limits{};
 
-        const CTxMemPool::Limits& limits{m_node.mempool ? m_node.mempool->m_limits : default_limits};
+        const CTxMemPool::Limits& limits{m_node.mempool ? m_node.mempool->m_opts.limits : default_limits};
 
         limit_ancestor_count = limits.ancestor_count;
         limit_descendant_count = limits.descendant_count;
     }
-    bool checkChainLimits(const CTransactionRef& tx) override
+    util::Result<void> checkChainLimits(const CTransactionRef& tx) override
     {
-        if (!m_node.mempool) return true;
+        if (!m_node.mempool) return {};
         LockPoints lp;
-        CTxMemPoolEntry entry(tx, 0, 0, 0, false, 0, lp);
-        const CTxMemPool::Limits& limits{m_node.mempool->m_limits};
+        CTxMemPoolEntry entry(tx, 0, 0, 0, 0, false, 0, lp);
         LOCK(m_node.mempool->cs);
-        return m_node.mempool->CalculateMemPoolAncestors(entry, limits).has_value();
+        return m_node.mempool->CheckPackageLimits({tx}, entry.GetTxSize());
     }
     CFeeRate estimateSmartFee(int num_blocks, bool conservative, FeeCalculation* calc) override
     {
@@ -700,17 +732,17 @@ public:
     CFeeRate relayMinFee() override
     {
         if (!m_node.mempool) return CFeeRate{DEFAULT_MIN_RELAY_TX_FEE};
-        return m_node.mempool->m_min_relay_feerate;
+        return m_node.mempool->m_opts.min_relay_feerate;
     }
     CFeeRate relayIncrementalFee() override
     {
         if (!m_node.mempool) return CFeeRate{DEFAULT_INCREMENTAL_RELAY_FEE};
-        return m_node.mempool->m_incremental_relay_feerate;
+        return m_node.mempool->m_opts.incremental_relay_feerate;
     }
     CFeeRate relayDustFee() override
     {
         if (!m_node.mempool) return CFeeRate{DUST_RELAY_TX_FEE};
-        return m_node.mempool->m_dust_relay_feerate;
+        return m_node.mempool->m_opts.dust_relay_feerate;
     }
     bool havePruned() override
     {
@@ -720,9 +752,9 @@ public:
     bool isReadyToBroadcast() override { return !chainman().m_blockman.LoadingBlocks() && !isInitialBlockDownload(); }
     bool isInitialBlockDownload() override
     {
-        return chainman().ActiveChainstate().IsInitialBlockDownload();
+        return chainman().IsInitialBlockDownload();
     }
-    bool shutdownRequested() override { return ShutdownRequested(); }
+    bool shutdownRequested() override { return ShutdownRequested(m_node); }
     void initMessage(const std::string& message) override { ::uiInterface.InitMessage(message); }
     void initWarning(const bilingual_str& message) override { InitWarning(message); }
     void initError(const bilingual_str& message) override { InitError(message); }
@@ -732,12 +764,12 @@ public:
     }
     std::unique_ptr<Handler> handleNotifications(std::shared_ptr<Notifications> notifications) override
     {
-        return std::make_unique<NotificationsHandlerImpl>(std::move(notifications));
+        return std::make_unique<NotificationsHandlerImpl>(validation_signals(), std::move(notifications));
     }
     void waitForNotificationsIfTipChanged(const uint256& old_tip) override
     {
         if (!old_tip.IsNull() && old_tip == WITH_LOCK(::cs_main, return chainman().ActiveChain().Tip()->GetBlockHash())) return;
-        SyncWithValidationInterfaceQueue();
+        validation_signals().SyncWithValidationInterfaceQueue();
     }
     std::unique_ptr<Handler> handleRpc(const CRPCCommand& command) override
     {
@@ -748,7 +780,6 @@ public:
     {
         RPCRunLater(name, std::move(fn), seconds);
     }
-    int rpcSerializationFlags() override { return RPCSerializationFlags(); }
     common::SettingsValue getSetting(const std::string& name) override
     {
         return args().GetSetting(name);
@@ -782,7 +813,7 @@ public:
     {
         if (!m_node.mempool) return;
         LOCK2(::cs_main, m_node.mempool->cs);
-        for (const CTxMemPoolEntry& entry : m_node.mempool->mapTx) {
+        for (const CTxMemPoolEntry& entry : m_node.mempool->entryAll()) {
             notifications.transactionAddedToMempool(entry.GetSharedTx());
         }
     }
@@ -794,6 +825,7 @@ public:
     NodeContext* context() override { return &m_node; }
     ArgsManager& args() { return *Assert(m_node.args); }
     ChainstateManager& chainman() { return *Assert(m_node.chainman); }
+    ValidationSignals& validation_signals() { return *Assert(m_node.validation_signals); }
     NodeContext& m_node;
 };
 } // namespace

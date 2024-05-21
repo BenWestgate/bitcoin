@@ -6,13 +6,15 @@
 #include <chainparams.h>
 #include <key.h>
 #include <pubkey.h>
+#include <span.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <util/strencodings.h>
 
 #include <array>
-#include <vector>
 #include <cstddef>
+#include <cstdint>
+#include <vector>
 
 #include <boost/test/unit_test.hpp>
 
@@ -36,14 +38,8 @@ void TestBIP324PacketVector(
 {
     // Convert input from hex to char/byte vectors/arrays.
     const auto in_priv_ours = ParseHex(in_priv_ours_hex);
-    const auto in_ellswift_ours_vec = ParseHex<std::byte>(in_ellswift_ours_hex);
-    assert(in_ellswift_ours_vec.size() == 64);
-    std::array<std::byte, 64> in_ellswift_ours;
-    std::copy(in_ellswift_ours_vec.begin(), in_ellswift_ours_vec.end(), in_ellswift_ours.begin());
-    const auto in_ellswift_theirs_vec = ParseHex<std::byte>(in_ellswift_theirs_hex);
-    assert(in_ellswift_theirs_vec.size() == 64);
-    std::array<std::byte, 64> in_ellswift_theirs;
-    std::copy(in_ellswift_theirs_vec.begin(), in_ellswift_theirs_vec.end(), in_ellswift_theirs.begin());
+    const auto in_ellswift_ours = ParseHex<std::byte>(in_ellswift_ours_hex);
+    const auto in_ellswift_theirs = ParseHex<std::byte>(in_ellswift_theirs_hex);
     const auto in_contents = ParseHex<std::byte>(in_contents_hex);
     const auto in_aad = ParseHex<std::byte>(in_aad_hex);
     const auto mid_send_garbage = ParseHex<std::byte>(mid_send_garbage_hex);
@@ -131,10 +127,10 @@ void TestBIP324PacketVector(
         // Decrypt length
         auto to_decrypt = ciphertext;
         if (error >= 2 && error <= 9) {
-            to_decrypt[InsecureRandRange(to_decrypt.size())] ^= std::byte(1U << InsecureRandRange(8));
+            to_decrypt[InsecureRandRange(to_decrypt.size())] ^= std::byte(1U << (error - 2));
         }
 
-        // Decrypt length and resize ciphertext to accomodate.
+        // Decrypt length and resize ciphertext to accommodate.
         uint32_t dec_len = dec_cipher.DecryptLength(MakeByteSpan(to_decrypt).first(cipher.LENGTH_LEN));
         to_decrypt.resize(dec_len + cipher.EXPANSION);
 

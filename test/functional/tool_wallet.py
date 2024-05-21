@@ -5,6 +5,7 @@
 """Test bitcoin-wallet."""
 
 import os
+import platform
 import stat
 import subprocess
 import textwrap
@@ -14,6 +15,7 @@ from collections import OrderedDict
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
+    assert_greater_than,
     sha256sum_file,
 )
 
@@ -21,29 +23,39 @@ from test_framework.util import (
 class ToolWalletTest(BitcoinTestFramework):
     def add_options(self, parser):
         self.add_wallet_options(parser)
+        parser.add_argument("--bdbro", action="store_true", help="Use the BerkeleyRO internal parser when dumping a Berkeley DB wallet file")
+        parser.add_argument("--swap-bdb-endian", action="store_true",help="When making Legacy BDB wallets, always make then byte swapped internally")
 
     def set_test_params(self):
         self.num_nodes = 1
         self.setup_clean_chain = True
         self.rpc_timeout = 120
+        if self.options.swap_bdb_endian:
+            self.extra_args = [["-swapbdbendian"]]
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
         self.skip_if_no_wallet_tool()
 
     def bitcoin_wallet_process(self, *args):
-        default_args = ['-datadir={}'.format(self.nodes[0].datadir), '-chain=%s' % self.chain]
+        default_args = ['-datadir={}'.format(self.nodes[0].datadir_path), '-chain=%s' % self.chain]
         if not self.options.descriptors and 'create' in args:
             default_args.append('-legacy')
+        if "dump" in args and self.options.bdbro:
+            default_args.append("-withinternalbdb")
 
         return subprocess.Popen([self.options.bitcoinwallet] + default_args + list(args), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     def assert_raises_tool_error(self, error, *args):
         p = self.bitcoin_wallet_process(*args)
         stdout, stderr = p.communicate()
-        assert_equal(p.poll(), 1)
         assert_equal(stdout, '')
-        assert_equal(stderr.strip(), error)
+        if isinstance(error, tuple):
+            assert_equal(p.poll(), error[0])
+            assert error[1] in stderr.strip()
+        else:
+            assert_equal(p.poll(), 1)
+            assert error in stderr.strip()
 
     def assert_tool_output(self, output, *args):
         p = self.bitcoin_wallet_process(*args)
@@ -153,8 +165,8 @@ class ToolWalletTest(BitcoinTestFramework):
             assert_equal(v, r[k])
 
     def do_tool_createfromdump(self, wallet_name, dumpfile, file_format=None):
-        dumppath = os.path.join(self.nodes[0].datadir, dumpfile)
-        rt_dumppath = os.path.join(self.nodes[0].datadir, "rt-{}.dump".format(wallet_name))
+        dumppath = self.nodes[0].datadir_path / dumpfile
+        rt_dumppath = self.nodes[0].datadir_path / "rt-{}.dump".format(wallet_name)
 
         dump_data = self.read_dump(dumppath)
 
@@ -324,7 +336,7 @@ class ToolWalletTest(BitcoinTestFramework):
         self.assert_raises_tool_error('No dump file provided. To use dump, -dumpfile=<filename> must be provided.', '-wallet=todump', 'dump')
 
         self.log.info('Checking basic dump')
-        wallet_dump = os.path.join(self.nodes[0].datadir, "wallet.dump")
+        wallet_dump = self.nodes[0].datadir_path / "wallet.dump"
         self.assert_tool_output('The dumpfile may contain private keys. To ensure the safety of your Bitcoin, do not share the dumpfile.\n', '-wallet=todump', '-dumpfile={}'.format(wallet_dump), 'dump')
 
         dump_data = self.read_dump(wallet_dump)
@@ -339,7 +351,7 @@ class ToolWalletTest(BitcoinTestFramework):
 
         self.log.info('Checking createfromdump arguments')
         self.assert_raises_tool_error('No dump file provided. To use createfromdump, -dumpfile=<filename> must be provided.', '-wallet=todump', 'createfromdump')
-        non_exist_dump = os.path.join(self.nodes[0].datadir, "wallet.nodump")
+        non_exist_dump = self.nodes[0].datadir_path / "wallet.nodump"
         self.assert_raises_tool_error('Unknown wallet file format "notaformat" provided. Please provide one of "bdb" or "sqlite".', '-wallet=todump', '-format=notaformat', '-dumpfile={}'.format(wallet_dump), 'createfromdump')
         self.assert_raises_tool_error('Dump file {} does not exist.'.format(non_exist_dump), '-wallet=todump', '-dumpfile={}'.format(non_exist_dump), 'createfromdump')
         wallet_path = self.nodes[0].wallets_path / "todump2"
@@ -354,17 +366,17 @@ class ToolWalletTest(BitcoinTestFramework):
             self.do_tool_createfromdump("load-sqlite", "wallet.dump", "sqlite")
 
         self.log.info('Checking createfromdump handling of magic and versions')
-        bad_ver_wallet_dump = os.path.join(self.nodes[0].datadir, "wallet-bad_ver1.dump")
+        bad_ver_wallet_dump = self.nodes[0].datadir_path / "wallet-bad_ver1.dump"
         dump_data["BITCOIN_CORE_WALLET_DUMP"] = "0"
         self.write_dump(dump_data, bad_ver_wallet_dump)
         self.assert_raises_tool_error('Error: Dumpfile version is not supported. This version of bitcoin-wallet only supports version 1 dumpfiles. Got dumpfile with version 0', '-wallet=badload', '-dumpfile={}'.format(bad_ver_wallet_dump), 'createfromdump')
         assert not (self.nodes[0].wallets_path / "badload").is_dir()
-        bad_ver_wallet_dump = os.path.join(self.nodes[0].datadir, "wallet-bad_ver2.dump")
+        bad_ver_wallet_dump = self.nodes[0].datadir_path / "wallet-bad_ver2.dump"
         dump_data["BITCOIN_CORE_WALLET_DUMP"] = "2"
         self.write_dump(dump_data, bad_ver_wallet_dump)
         self.assert_raises_tool_error('Error: Dumpfile version is not supported. This version of bitcoin-wallet only supports version 1 dumpfiles. Got dumpfile with version 2', '-wallet=badload', '-dumpfile={}'.format(bad_ver_wallet_dump), 'createfromdump')
         assert not (self.nodes[0].wallets_path / "badload").is_dir()
-        bad_magic_wallet_dump = os.path.join(self.nodes[0].datadir, "wallet-bad_magic.dump")
+        bad_magic_wallet_dump = self.nodes[0].datadir_path / "wallet-bad_magic.dump"
         del dump_data["BITCOIN_CORE_WALLET_DUMP"]
         dump_data["not_the_right_magic"] = "1"
         self.write_dump(dump_data, bad_magic_wallet_dump, "not_the_right_magic")
@@ -372,19 +384,19 @@ class ToolWalletTest(BitcoinTestFramework):
         assert not (self.nodes[0].wallets_path / "badload").is_dir()
 
         self.log.info('Checking createfromdump handling of checksums')
-        bad_sum_wallet_dump = os.path.join(self.nodes[0].datadir, "wallet-bad_sum1.dump")
+        bad_sum_wallet_dump = self.nodes[0].datadir_path / "wallet-bad_sum1.dump"
         dump_data = orig_dump.copy()
         checksum = dump_data["checksum"]
         dump_data["checksum"] = "1" * 64
         self.write_dump(dump_data, bad_sum_wallet_dump)
         self.assert_raises_tool_error('Error: Dumpfile checksum does not match. Computed {}, expected {}'.format(checksum, "1" * 64), '-wallet=bad', '-dumpfile={}'.format(bad_sum_wallet_dump), 'createfromdump')
         assert not (self.nodes[0].wallets_path / "badload").is_dir()
-        bad_sum_wallet_dump = os.path.join(self.nodes[0].datadir, "wallet-bad_sum2.dump")
+        bad_sum_wallet_dump = self.nodes[0].datadir_path / "wallet-bad_sum2.dump"
         del dump_data["checksum"]
         self.write_dump(dump_data, bad_sum_wallet_dump, skip_checksum=True)
         self.assert_raises_tool_error('Error: Missing checksum', '-wallet=badload', '-dumpfile={}'.format(bad_sum_wallet_dump), 'createfromdump')
         assert not (self.nodes[0].wallets_path / "badload").is_dir()
-        bad_sum_wallet_dump = os.path.join(self.nodes[0].datadir, "wallet-bad_sum3.dump")
+        bad_sum_wallet_dump = self.nodes[0].datadir_path / "wallet-bad_sum3.dump"
         dump_data["checksum"] = "2" * 10
         self.write_dump(dump_data, bad_sum_wallet_dump)
         self.assert_raises_tool_error('Error: Checksum is not the correct size', '-wallet=badload', '-dumpfile={}'.format(bad_sum_wallet_dump), 'createfromdump')
@@ -394,9 +406,147 @@ class ToolWalletTest(BitcoinTestFramework):
         self.assert_raises_tool_error('Error: Checksum is not the correct size', '-wallet=badload', '-dumpfile={}'.format(bad_sum_wallet_dump), 'createfromdump')
         assert not (self.nodes[0].wallets_path / "badload").is_dir()
 
+    def test_chainless_conflicts(self):
+        self.log.info("Test wallet tool when wallet contains conflicting transactions")
+        self.restart_node(0)
+        self.generate(self.nodes[0], 101)
+
+        def_wallet = self.nodes[0].get_wallet_rpc(self.default_wallet_name)
+
+        self.nodes[0].createwallet("conflicts")
+        wallet = self.nodes[0].get_wallet_rpc("conflicts")
+        def_wallet.sendtoaddress(wallet.getnewaddress(), 10)
+        self.generate(self.nodes[0], 1)
+
+        # parent tx
+        parent_txid = wallet.sendtoaddress(wallet.getnewaddress(), 9)
+        parent_txid_bytes = bytes.fromhex(parent_txid)[::-1]
+        conflict_utxo = wallet.gettransaction(txid=parent_txid, verbose=True)["decoded"]["vin"][0]
+
+        # The specific assertion in MarkConflicted being tested requires that the parent tx is already loaded
+        # by the time the child tx is loaded. Since transactions end up being loaded in txid order due to how both
+        # and sqlite store things, we can just grind the child tx until it has a txid that is greater than the parent's.
+        locktime = 500000000 # Use locktime as nonce, starting at unix timestamp minimum
+        addr = wallet.getnewaddress()
+        while True:
+            child_send_res = wallet.send(outputs=[{addr: 8}], add_to_wallet=False, locktime=locktime)
+            child_txid = child_send_res["txid"]
+            child_txid_bytes = bytes.fromhex(child_txid)[::-1]
+            if (child_txid_bytes > parent_txid_bytes):
+                wallet.sendrawtransaction(child_send_res["hex"])
+                break
+            locktime += 1
+
+        # conflict with parent
+        conflict_unsigned = self.nodes[0].createrawtransaction(inputs=[conflict_utxo], outputs=[{wallet.getnewaddress(): 9.9999}])
+        conflict_signed = wallet.signrawtransactionwithwallet(conflict_unsigned)["hex"]
+        conflict_txid = self.nodes[0].sendrawtransaction(conflict_signed)
+        self.generate(self.nodes[0], 1)
+        assert_equal(wallet.gettransaction(txid=parent_txid)["confirmations"], -1)
+        assert_equal(wallet.gettransaction(txid=child_txid)["confirmations"], -1)
+        assert_equal(wallet.gettransaction(txid=conflict_txid)["confirmations"], 1)
+
+        self.stop_node(0)
+
+        # Wallet tool should successfully give info for this wallet
+        expected_output = textwrap.dedent(f'''\
+            Wallet info
+            ===========
+            Name: conflicts
+            Format: {"sqlite" if self.options.descriptors else "bdb"}
+            Descriptors: {"yes" if self.options.descriptors else "no"}
+            Encrypted: no
+            HD (hd seed available): yes
+            Keypool Size: {"8" if self.options.descriptors else "1"}
+            Transactions: 4
+            Address Book: 4
+        ''')
+        self.assert_tool_output(expected_output, "-wallet=conflicts", "info")
+
+    def test_dump_endianness(self):
+        self.log.info("Testing dumps of the same contents with different BDB endianness")
+
+        self.start_node(0)
+        self.nodes[0].createwallet("endian")
+        self.stop_node(0)
+
+        wallet_dump = self.nodes[0].datadir_path / "endian.dump"
+        self.assert_tool_output("The dumpfile may contain private keys. To ensure the safety of your Bitcoin, do not share the dumpfile.\n", "-wallet=endian", f"-dumpfile={wallet_dump}", "dump")
+        expected_dump = self.read_dump(wallet_dump)
+
+        self.do_tool_createfromdump("native_endian", "endian.dump", "bdb")
+        native_dump = self.read_dump(self.nodes[0].datadir_path / "rt-native_endian.dump")
+        self.assert_dump(expected_dump, native_dump)
+
+        self.do_tool_createfromdump("other_endian", "endian.dump", "bdb_swap")
+        other_dump = self.read_dump(self.nodes[0].datadir_path / "rt-other_endian.dump")
+        self.assert_dump(expected_dump, other_dump)
+
+    def test_dump_very_large_records(self):
+        self.log.info("Test that wallets with large records are successfully dumped")
+
+        self.start_node(0)
+        self.nodes[0].createwallet("bigrecords")
+        wallet = self.nodes[0].get_wallet_rpc("bigrecords")
+
+        # Both BDB and sqlite have maximum page sizes of 65536 bytes, with defaults of 4096
+        # When a record exceeds some size threshold, both BDB and SQLite will store the data
+        # in one or more overflow pages. We want to make sure that our tooling can dump such
+        # records, even when they span multiple pages. To make a large record, we just need
+        # to make a very big transaction.
+        self.generate(self.nodes[0], 101)
+        def_wallet = self.nodes[0].get_wallet_rpc(self.default_wallet_name)
+        outputs = {}
+        for i in range(500):
+            outputs[wallet.getnewaddress(address_type="p2sh-segwit")] = 0.01
+        def_wallet.sendmany(amounts=outputs)
+        self.generate(self.nodes[0], 1)
+        send_res = wallet.sendall([def_wallet.getnewaddress()])
+        self.generate(self.nodes[0], 1)
+        assert_equal(send_res["complete"], True)
+        tx = wallet.gettransaction(txid=send_res["txid"], verbose=True)
+        assert_greater_than(tx["decoded"]["size"], 70000)
+
+        self.stop_node(0)
+
+        wallet_dump = self.nodes[0].datadir_path / "bigrecords.dump"
+        self.assert_tool_output("The dumpfile may contain private keys. To ensure the safety of your Bitcoin, do not share the dumpfile.\n", "-wallet=bigrecords", f"-dumpfile={wallet_dump}", "dump")
+        dump = self.read_dump(wallet_dump)
+        for k,v in dump.items():
+            if tx["hex"] in v:
+                break
+        else:
+            assert False, "Big transaction was not found in wallet dump"
+
+    def test_dump_unclean_lsns(self):
+        if not self.options.bdbro:
+            return
+        self.log.info("Test that a legacy wallet that has not been compacted is not dumped by bdbro")
+
+        self.start_node(0, extra_args=["-flushwallet=0"])
+        self.nodes[0].createwallet("unclean_lsn")
+        wallet = self.nodes[0].get_wallet_rpc("unclean_lsn")
+        # First unload and load normally to make sure everything is written
+        wallet.unloadwallet()
+        self.nodes[0].loadwallet("unclean_lsn")
+        # Next cause a bunch of writes by filling the keypool
+        wallet.keypoolrefill(wallet.getwalletinfo()["keypoolsize"] + 100)
+        # Lastly kill bitcoind so that the LSNs don't get reset
+        self.nodes[0].process.kill()
+        self.nodes[0].wait_until_stopped(expected_ret_code=1 if platform.system() == "Windows" else -9)
+        assert self.nodes[0].is_node_stopped()
+
+        wallet_dump = self.nodes[0].datadir_path / "unclean_lsn.dump"
+        self.assert_raises_tool_error("LSNs are not reset, this database is not completely flushed. Please reopen then close the database with a version that has BDB support", "-wallet=unclean_lsn", f"-dumpfile={wallet_dump}", "dump")
+
+        # File can be dumped after reload it normally
+        self.start_node(0)
+        self.nodes[0].loadwallet("unclean_lsn")
+        self.stop_node(0)
+        self.assert_tool_output("The dumpfile may contain private keys. To ensure the safety of your Bitcoin, do not share the dumpfile.\n", "-wallet=unclean_lsn", f"-dumpfile={wallet_dump}", "dump")
 
     def run_test(self):
-        self.wallet_path = os.path.join(self.nodes[0].wallets_path, self.default_wallet_name, self.wallet_data_filename)
+        self.wallet_path = self.nodes[0].wallets_path / self.default_wallet_name / self.wallet_data_filename
         self.test_invalid_tool_commands_and_args()
         # Warning: The following tests are order-dependent.
         self.test_tool_wallet_info()
@@ -406,7 +556,11 @@ class ToolWalletTest(BitcoinTestFramework):
         if not self.options.descriptors:
             # Salvage is a legacy wallet only thing
             self.test_salvage()
+            self.test_dump_endianness()
+            self.test_dump_unclean_lsns()
         self.test_dump_createfromdump()
+        self.test_chainless_conflicts()
+        self.test_dump_very_large_records()
 
 if __name__ == '__main__':
     ToolWalletTest().main()
