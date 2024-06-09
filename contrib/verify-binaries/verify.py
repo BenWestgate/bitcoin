@@ -509,7 +509,9 @@ def verify_published_handler(args: argparse.Namespace) -> ReturnCode:
     # Extract hashes and filenames
     hashes_to_verify = parse_sums_file(SUMS_FILENAME, [os_filter])
     if not hashes_to_verify:
-        log.error("no files matched the platform specified. check available versions on bitcoincore.org/bin")
+        available_versions = ["-".join(line[1].split("-")[2:]) for line in parse_sums_file(SUMS_FILENAME, [])]
+        closest_match = difflib.get_close_matches(os_filter, available_versions, cutoff=0, n=1)[0]
+        log.error("No files matched the platform specified. Did you mean: "+closest_match)
         return ReturnCode.NO_BINARIES_MATCH
 
     # remove binaries that are known not to be hosted by bitcoincore.org
