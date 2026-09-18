@@ -67,7 +67,7 @@ The `watch_only_wallet` wallet will be used to track and validate incoming trans
 
 At this point, it's important to understand that both the `offline_wallet` and online `watch_only_wallet` share the same public keys. As a result, they generate the same addresses. Transactions can be created using either wallet, but valid signatures can only be added by the `offline_wallet` as only it has the private keys.
 
-1. Generate an address to receive coins. You can use _either_ the `offline_wallet` or the online `watch_only_wallet` to generate this address, as they will produce the same addresses. For the sake of this guide, we'll use the online `watch_only_wallet` to generate the address.
+1. Generate an address to receive coins with the online `watch_only_wallet`.
 
 ```sh
 [online]$ ./build/bin/bitcoin-cli -signet -rpcwallet="watch_only_wallet" getnewaddress
@@ -75,9 +75,19 @@ At this point, it's important to understand that both the `offline_wallet` and o
 tb1qtu5qgc6ddhmqm5yqjvhg83qgk2t4ewajg0h6yh
 ```
 
-2. Visit a faucet like https://signetfaucet.com and enter your address from the previous command to receive a small amount of signet coins to this address.
+2. Before using the address, transfer it to the offline host and verify that the `offline_wallet` recognizes it as its own:
 
-3. Confirm that coins were received using the online `watch_only_wallet`. Note that the transaction may take a few moments before being received on your local node, depending on its connectivity. Just re-run the command periodically until the transaction is received.
+```sh
+[offline]$ ./build/bin/bitcoin-cli -signet -rpcwallet="offline_wallet" getaddressinfo tb1qtu5qgc6ddhmqm5yqjvhg83qgk2t4ewajg0h6yh | jq -r '.ismine'
+
+true
+```
+
+Do not fund the address unless this returns `true`. Compare the verified address with the address that will actually receive the funds. This prevents a compromised online host from substituting an attacker-controlled receive address.
+
+3. Visit a faucet like https://signetfaucet.com and enter the verified address from the previous steps to receive a small amount of signet coins to this address.
+
+4. Confirm that coins were received using the online `watch_only_wallet`. Note that the transaction may take a few moments before being received on your local node, depending on its connectivity. Just re-run the command periodically until the transaction is received.
 
 ```sh
 [online]$ ./build/bin/bitcoin-cli -signet -rpcwallet="watch_only_wallet" listunspent
