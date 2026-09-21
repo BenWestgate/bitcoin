@@ -138,6 +138,7 @@ class SigData:
     """GPG signature data as parsed from GPG stdout."""
     def __init__(self):
         self.key = None
+        self.fingerprint = None
         self.name = ""
         self.trusted = False
         self.status = ""
@@ -199,6 +200,13 @@ def parse_gpg_result(
         elif line_begins_with(r"ERRSIG(?:\s|$)", line):
             curr_sigdata.key, _, _, _, _, _ = line.split()[2:8]
             curr_sigs = unknown_sigs
+
+        elif line_begins_with(r"VALIDSIG(?:\s|$)", line):
+            fields = line.split()
+            # When a signing subkey is used, GPG appends the primary key's
+            # fingerprint. Trust and signature thresholds apply to the primary
+            # key, not to each of its signing subkeys.
+            curr_sigdata.fingerprint = fields[11] if len(fields) > 11 else fields[2]
 
         elif line_begins_with(r"TRUST_(UNDEFINED|NEVER)(?:\s|$)", line):
             curr_sigdata.trusted = False
@@ -363,14 +371,20 @@ def verify_shasums_signature(
     # binary verification?
     trusted_keys = set()
     if args.trusted_keys:
-        trusted_keys |= set(args.trusted_keys.split(','))
+        trusted_keys |= {key.strip().upper() for key in args.trusted_keys.split(',')}
 
     # Tally signatures and make sure we have enough goods to fulfill
     # our threshold.
-    good_trusted = [sig for sig in good if sig.trusted or sig.key in trusted_keys]
+    good_trusted = [
+        sig for sig in good
+        if sig.trusted or (sig.fingerprint and sig.fingerprint.upper() in trusted_keys)
+    ]
     good_untrusted = [sig for sig in good if sig not in good_trusted]
-    num_trusted = len(good_trusted) + len(good_untrusted)
-    log.info(f"got {num_trusted} good signatures")
+    trusted_fingerprints = {
+        sig.fingerprint for sig in good_trusted if sig.fingerprint
+    }
+    num_trusted = len(trusted_fingerprints)
+    log.info(f"got {num_trusted} good signatures from distinct trusted keys")
 
     if num_trusted < min_good_sigs:
         log.info("Maybe you need to import "
@@ -640,7 +654,9 @@ def main():
     parser.add_argument(
         '--trusted-keys', action='store', nargs='?',
         default=os.environ.get('BINVERIFY_TRUSTED_KEYS', ''),
-        help='A list of trusted signer GPG keys, separated by commas. Not "trusted keys" in the GPG sense.',
+        help=(
+            'A list of trusted signer GPG primary-key fingerprints, separated by '
+            'commas. Not "trusted keys" in the GPG sense.'),
     )
     parser.add_argument(
         '--json', action='store_true',
