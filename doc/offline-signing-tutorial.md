@@ -19,6 +19,7 @@ We are going to first create an `offline_wallet` on the offline host. We will th
 
 ### Requirements
 - [jq](https://jqlang.github.io/jq/) installation - This tutorial uses jq to process certain fields from JSON RPC responses, but this convenience is optional.
+- A verified copy of Bitcoin Core on both hosts. See [Verify Binaries](/contrib/verify-binaries/README.md) for how to check a release against its signed checksums before copying it to the offline host.
 
 ### Create and Prepare the `offline_wallet`
 
@@ -154,6 +155,45 @@ Decode and analyze the unsigned PSBT on the `offline_wallet` using the `funded_p
 
 Notice that the analysis of the PSBT shows that "signatures" are missing and should be provided by the private key corresponding to the public key hash (hash160) "5f2804634d6df60dd080932e83c408b2975cbbb2"
 
+### Verify the Unsigned PSBT
+
+Signing approves whatever the PSBT says, and the PSBT was built on the online host. Malware there could change the destination, swap the change output for an address it controls, or set an excessive fee. Check these on the offline host before signing.
+
+1. List the fee and the outputs:
+
+```sh
+[offline]$ ./build/bin/bitcoin-cli -signet decodepsbt $(cat /path/to/funded_psbt.txt) \
+              | jq '{fee, outputs: [.outputs[] | {amount, address: .script.address}]}'
+
+{
+  "fee": 0.00014100,
+  "outputs": [
+    {
+      "amount": 0.00080000,
+      "address": "tb1q9k5w0nhnhyeh78snpxh0t5t7c3lxdeg3erez32"
+    },
+    {
+      "amount": 0.00905900,
+      "address": "tb1qc6farl7k5asvyeejlfmyyac6zk37rrm08w599p"
+    }
+  ]
+}
+```
+
+2. Check that every destination address and amount is exactly the one you intended, and that the fee is reasonable for the current fee rate.
+
+3. Check that every other output pays back to your own wallet (change). Ask the `offline_wallet` about each one:
+
+```sh
+[offline]$ ./build/bin/bitcoin-cli -signet -rpcwallet="offline_wallet" getaddressinfo \
+              tb1qc6farl7k5asvyeejlfmyyac6zk37rrm08w599p \
+              | jq '.ismine'
+
+true
+```
+
+If any of these checks fail, do not sign the PSBT.
+
 ### Process and Sign the PSBT
 
 1. Unlock the `offline_wallet` with the Passphrase:
@@ -174,7 +214,16 @@ Use the walletpassphrase command to unlock the `offline_wallet` with the passphr
  ```
 
 ### Broadcast the Signed and Finalized PSBT
-Broadcast the funded, signed and finalized PSBT `final_psbt.txt` using `sendrawtransaction` with an online node:
+Broadcast the funded, signed and finalized PSBT `final_psbt.txt` using `sendrawtransaction` with an online node.
+
+Optionally, first use `testmempoolaccept` to check that the node would accept the transaction, without broadcasting it:
+
+```sh
+[online]$ ./build/bin/bitcoin-cli -signet testmempoolaccept "[\"$(cat /path/to/final_psbt.txt)\"]" \
+              | jq '.[0].allowed'
+
+true
+```
 
 ```sh
 [online]$ ./build/bin/bitcoin-cli -signet sendrawtransaction $(cat /path/to/final_psbt.txt)
