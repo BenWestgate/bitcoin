@@ -110,7 +110,7 @@ tb1qtu5qgc6ddhmqm5yqjvhg83qgk2t4ewajg0h6yh
 
 ```sh
 [online]$ ./build/bin/bitcoin-cli -signet -rpcwallet="watch_only_wallet" send \
-              '{"tb1q9k5w0nhnhyeh78snpxh0t5t7c3lxdeg3erez32": 0.009}' \
+              '{"tb1q9k5w0nhnhyeh78snpxh0t5t7c3lxdeg3erez32": 0.0008}' \
               | jq -r '.psbt' \
               > /path/to/funded_psbt.txt
 
@@ -191,7 +191,7 @@ Confirm the updated balance of the offline wallet using the `watch_only_wallet`.
 
 {
   "mine": {
-    "trusted": 0.00085900,
+    "trusted": 0.00905900,
     "untrusted_pending": 0.00000000,
     "immature": 0.00000000
   },
