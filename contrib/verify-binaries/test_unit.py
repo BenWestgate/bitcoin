@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026-present The Bitcoin Core developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or http://www.opensource.org/licenses/mit-license.php.
+"""Unit tests for the signature threshold in verify.py. Run without network."""
 
 import argparse
 import importlib.util
@@ -52,7 +56,20 @@ class VerifyBinariesTest(unittest.TestCase):
         self.assertEqual(unknown, [])
         self.assertEqual(bad, [])
 
-    def test_untrusted_signatures_do_not_meet_threshold(self):
+    def test_keyring_signers_meet_threshold_by_default(self):
+        signatures = [make_signature(str(i) * 40) for i in range(1, 4)]
+        result = self.verify_signatures(signatures)
+        self.assertEqual(result, VERIFY.ReturnCode.SUCCESS)
+
+    def test_duplicate_keyring_signer_does_not_meet_threshold(self):
+        fingerprint = "1" * 40
+        signatures = [
+            make_signature(fingerprint, key=str(i) * 16) for i in range(1, 4)
+        ]
+        result = self.verify_signatures(signatures)
+        self.assertEqual(result, VERIFY.ReturnCode.NOT_ENOUGH_GOOD_SIGS)
+
+    def test_unlisted_signatures_do_not_meet_threshold(self):
         signatures = [make_signature(str(i) * 40) for i in range(1, 4)]
         result = self.verify_signatures(signatures, trusted_keys="4" * 40)
         self.assertEqual(result, VERIFY.ReturnCode.NOT_ENOUGH_GOOD_SIGS)
@@ -63,10 +80,9 @@ class VerifyBinariesTest(unittest.TestCase):
         result = self.verify_signatures([signature], threshold=1)
         self.assertEqual(result, VERIFY.ReturnCode.NOT_ENOUGH_GOOD_SIGS)
 
-    def test_untrusted_signatures_do_not_supplement_trusted_signatures(self):
-        signatures = [make_signature("1" * 40, trusted=True)]
-        signatures.extend(make_signature(str(i) * 40) for i in range(2, 4))
-        result = self.verify_signatures(signatures)
+    def test_unlisted_signatures_do_not_supplement_listed_signatures(self):
+        signatures = [make_signature(str(i) * 40) for i in range(1, 4)]
+        result = self.verify_signatures(signatures, trusted_keys="1" * 40)
         self.assertEqual(result, VERIFY.ReturnCode.NOT_ENOUGH_GOOD_SIGS)
 
     def test_duplicate_signer_does_not_meet_threshold(self):
@@ -89,6 +105,15 @@ class VerifyBinariesTest(unittest.TestCase):
         ]
         result = self.verify_signatures(signatures)
         self.assertEqual(result, VERIFY.ReturnCode.SUCCESS)
+
+    def test_parse_trusted_keys(self):
+        self.assertEqual(
+            VERIFY.parse_trusted_keys(" " + "a" * 40 + ", ,AAAA " + "a" * 36),
+            {"A" * 40},
+        )
+        self.assertEqual(VERIFY.parse_trusted_keys(""), set())
+        with self.assertRaises(ValueError):
+            VERIFY.parse_trusted_keys("A" * 16)
 
     def test_fingerprint_is_not_added_to_json_representation(self):
         signature = make_signature("1" * 40)

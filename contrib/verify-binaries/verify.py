@@ -9,9 +9,9 @@ signature file SHA256SUMS.asc from bitcoincore.org and bitcoin.org and
 compares them.
 
 The sum-signature file is signed by a number of builder keys. This script
-ensures that there is a minimum threshold of signatures from pubkeys that
-we trust. This trust is articulated on the basis of configuration options
-here, but by default is based upon local GPG trust settings.
+ensures that there is a minimum threshold of signatures from distinct pubkeys
+that we trust. By default every key in the local GPG keyring counts. With
+--trusted-keys, only the listed keys and keys that GPG itself trusts count.
 
 The builder keys are available in the guix.sigs repo:
 
@@ -227,6 +227,15 @@ def parse_gpg_result(
     return (good_sigs, unknown_sigs, bad_sigs)
 
 
+def parse_trusted_keys(value: str) -> set[str]:
+    """Return the primary-key fingerprints in a comma-separated list."""
+    keys = {''.join(key.split()).upper() for key in value.split(',')} - {''}
+    for key in keys:
+        if not re.fullmatch(r'[0-9A-F]{40}|[0-9A-F]{64}', key):
+            raise ValueError(f"{key} is not a full primary-key fingerprint")
+    return keys
+
+
 def files_are_equal(filename1, filename2):
     with open(filename1, 'rb') as file1:
         contents1 = file1.read()
@@ -369,22 +378,19 @@ def verify_shasums_signature(
     # which pubkeys convince us that this sums file is legitimate. In other words,
     # which pubkeys within the Bitcoin community do we trust for the purposes of
     # binary verification?
-    trusted_keys = set()
-    if args.trusted_keys:
-        trusted_keys |= {key.strip().upper() for key in args.trusted_keys.split(',')}
+    trusted_keys = parse_trusted_keys(args.trusted_keys or '')
 
     # Tally signatures and make sure we have enough goods to fulfill
-    # our threshold.
+    # our threshold. Without --trusted-keys, every key in the local keyring
+    # counts. Each signer counts once, however many signatures it made.
     good_trusted = [
         sig for sig in good
         if sig.trusted or (sig.fingerprint and sig.fingerprint.upper() in trusted_keys)
     ]
     good_untrusted = [sig for sig in good if sig not in good_trusted]
-    trusted_fingerprints = {
-        sig.fingerprint for sig in good_trusted if sig.fingerprint
-    }
-    num_trusted = len(trusted_fingerprints)
-    log.info(f"got {num_trusted} good signatures from distinct trusted keys")
+    counted = good_trusted if trusted_keys else good
+    num_trusted = len({sig.fingerprint for sig in counted if sig.fingerprint})
+    log.info(f"got good signatures from {num_trusted} distinct key(s)")
 
     if num_trusted < min_good_sigs:
         log.info("Maybe you need to import "
@@ -696,6 +702,10 @@ def main():
     )
 
     args = parser.parse_args()
+    try:
+        parse_trusted_keys(args.trusted_keys or '')
+    except ValueError as e:
+        parser.error(f"--trusted-keys: {e}")
     if args.quiet:
         log.setLevel(logging.WARNING)
 
