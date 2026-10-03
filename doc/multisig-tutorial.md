@@ -12,21 +12,28 @@ Before starting this tutorial, start the bitcoin node on the signet network.
 ./build/bin/bitcoin node -signet -daemon
 ```
 
-This tutorial also uses the default PKH derivation path to get the xpubs and does not conform to [BIP 45](https://github.com/bitcoin/bips/blob/master/bip-0045.mediawiki) or [BIP 87](https://github.com/bitcoin/bips/blob/master/bip-0087.mediawiki).
+This tutorial derives each participant's xpub at the [BIP 87](https://github.com/bitcoin/bips/blob/master/bip-0087.mediawiki) account path `m/87h/1h/0h`, as used on test networks. On mainnet the path is `m/87h/0h/0h`.
 
 ## 1.1 Basic Multisig Workflow
 
 ### 1.1 Create the Descriptor Wallets
 
-For a 2-of-3 multisig, create 3 wallets. These wallets contain HD seed and private keys, which will be used to sign the PSBTs and derive the xpub.
+For a 2-of-3 multisig, create 3 wallets, one for each participant. Each wallet is created blank, and `addhdkey` then adds an HD key to it. The wallet uses this key to derive the participant's xpub and, once the multisig descriptor is imported, to sign PSBTs.
 
-These three wallets should not be used directly for privacy reasons (public key reuse). They should only be used to sign transactions for the (watch-only) multisig wallet.
+Because the wallets are blank, they have no singlesig addresses that could be used by mistake.
 
 ```bash
 for ((n=1;n<=3;n++))
 do
- ./build/bin/bitcoin rpc -signet createwallet "participant_${n}"
+ ./build/bin/bitcoin rpc -signet -named createwallet wallet_name="participant_${n}" blank=true
+ ./build/bin/bitcoin rpc -signet -rpcwallet="participant_${n}" addhdkey
 done
+```
+
+A later step spends from the multisig wallet, so create one more wallet to receive that payment. This one is an ordinary singlesig wallet, standing in for whoever is being paid:
+
+```bash
+./build/bin/bitcoin rpc -signet createwallet "recipient"
 ```
 
 Extract the xpub of each wallet. To do this, the `derivehdkey` RPC is used.
@@ -38,7 +45,7 @@ declare -A xpubs
 
 for ((n=1;n<=3;n++))
 do
- xpubs["xpub_${n}"]=$(./build/bin/bitcoin rpc -signet -rpcwallet="participant_${n}" derivehdkey "m/44h/1h/0h" | jq -r '.origin + .xpub')
+ xpubs["xpub_${n}"]=$(./build/bin/bitcoin rpc -signet -rpcwallet="participant_${n}" derivehdkey "m/87h/1h/0h" | jq -r '.origin + .xpub')
 done
 ```
 
@@ -48,7 +55,7 @@ The following command can be used to verify if the xpubs were obtained successfu
 for x in "${!xpubs[@]}"; do printf "[%s]=%s\n" "$x" "${xpubs[$x]}" ; done
 ```
 
-As previously mentioned, this step extracts the `m/44'/1'/0'` account instead of the path defined in [BIP 45](https://github.com/bitcoin/bips/blob/master/bip-0045.mediawiki) or [BIP 87](https://github.com/bitcoin/bips/blob/master/bip-0087.mediawiki), because the wallet currently can't sign for a derivation path that's not used in one of its descriptors.
+Each xpub includes its key origin (the master key fingerprint and derivation path), for example `[d34db33f/87h/1h/0h]tpub...`. Keep the origin when sharing the xpub: hardware signers need it, and the wallet that holds the key uses it to recognize the key as its own.
 
 ### 1.2 Define the Multisig Descriptor
 
@@ -79,9 +86,16 @@ Documentation for these and other parameters can be found by typing `./build/bin
 
 ### 1.3 Create the Multisig Wallet
 
-To create the multisig wallet, first create an empty one (no keys, HD seed and private keys disabled).
+Every participant imports the descriptor created in the previous step into their own wallet using the `importdescriptors` RPC. The descriptor only contains xpubs, so all participants import the same string. Each wallet recognizes the xpub it derived and uses the matching private key, so it can sign for the multisig. It warns that not all private keys were provided, which is expected: the other participants' keys stay with them.
 
-Then import the descriptor created in the previous step using the `importdescriptors` RPC.
+```bash
+for ((n=1;n<=3;n++))
+do
+ ./build/bin/bitcoin rpc -signet -rpcwallet="participant_${n}" importdescriptors "$multisig_desc"
+done
+```
+
+Anyone, for example a coordinator who holds none of the keys, can also follow the multisig by importing the same descriptor into a watch-only wallet (no keys, HD seed and private keys disabled). This tutorial uses such a wallet to receive funds and create transactions.
 
 After that, `listdescriptors` can be used to check if the wallet was created successfully.
 
@@ -100,6 +114,7 @@ Once the wallets have already been created and this tutorial needs to be repeate
 ```bash
 for ((n=1;n<=3;n++)); do ./build/bin/bitcoin rpc -signet loadwallet "participant_${n}"; done
 ./build/bin/bitcoin rpc -signet loadwallet "multisig_wallet_01"
+./build/bin/bitcoin rpc -signet loadwallet "recipient"
 ```
 
 ### 1.4 Fund the wallet
@@ -138,7 +153,7 @@ PSBT is a data format that allows wallets and other tools to exchange informatio
 
 The current PSBT version (v0) is defined in [BIP 174](https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki).
 
-For simplicity, the destination address is taken from the `participant_1` wallet in the code above, but it can be any valid bitcoin address.
+The destination address is taken from the `recipient` wallet, but it can be any valid bitcoin address. Taking it from a participant wallet would pay the multisig itself, because the multisig is now that wallet's only descriptor.
 
 The `walletcreatefundedpsbt` RPC is used to create and fund a transaction in the PSBT format. It is the first step in creating the PSBT.
 
@@ -147,7 +162,7 @@ balance=$(./build/bin/bitcoin rpc -signet -rpcwallet="multisig_wallet_01" getbal
 
 amount=$(echo "$balance * 0.8" | bc -l | sed -e 's/^\./0./' -e 's/^-\./-0./')
 
-destination_addr=$(./build/bin/bitcoin rpc -signet -rpcwallet="participant_1" getnewaddress)
+destination_addr=$(./build/bin/bitcoin rpc -signet -rpcwallet="recipient" getnewaddress)
 
 funded_psbt=$(./build/bin/bitcoin rpc -signet -rpcwallet="multisig_wallet_01" walletcreatefundedpsbt outputs="{\"$destination_addr\": $amount}" | jq -r '.psbt')
 ```
