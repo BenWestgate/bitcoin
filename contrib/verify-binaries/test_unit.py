@@ -28,7 +28,7 @@ def make_signature(fingerprint, trusted=False, key=None):
 
 
 class VerifyBinariesTest(unittest.TestCase):
-    def verify_signatures(self, signatures, trusted_keys="", threshold=3):
+    def verify_signatures(self, signatures, trusted_keys=None, threshold=3):
         args = argparse.Namespace(
             import_keys=False,
             keyserver="unused",
@@ -106,12 +106,27 @@ class VerifyBinariesTest(unittest.TestCase):
         result = self.verify_signatures(signatures)
         self.assertEqual(result, VERIFY.ReturnCode.SUCCESS)
 
+    def test_explicit_list_preserves_gpg_trusted_signers(self):
+        signatures = [
+            make_signature(str(i) * 40, trusted=True) for i in range(1, 4)
+        ]
+        result = self.verify_signatures(signatures, trusted_keys="4" * 40)
+        self.assertEqual(result, VERIFY.ReturnCode.SUCCESS)
+
+    def test_empty_explicit_trust_list_is_rejected(self):
+        signatures = [make_signature(str(i) * 40) for i in range(1, 4)]
+        for value in ("", " ", ",", " , , \t"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.verify_signatures(signatures, trusted_keys=value)
+
     def test_parse_trusted_keys(self):
         self.assertEqual(
             VERIFY.parse_trusted_keys(" " + "a" * 40 + ", ,AAAA " + "a" * 36),
             {"A" * 40},
         )
-        self.assertEqual(VERIFY.parse_trusted_keys(""), set())
+        self.assertEqual(VERIFY.parse_trusted_keys(None), set())
+        with self.assertRaises(ValueError):
+            VERIFY.parse_trusted_keys("")
         with self.assertRaises(ValueError):
             VERIFY.parse_trusted_keys("A" * 16)
 

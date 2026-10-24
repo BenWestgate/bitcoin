@@ -227,9 +227,13 @@ def parse_gpg_result(
     return (good_sigs, unknown_sigs, bad_sigs)
 
 
-def parse_trusted_keys(value: str) -> set[str]:
+def parse_trusted_keys(value: t.Optional[str]) -> set[str]:
     """Return the primary-key fingerprints in a comma-separated list."""
+    if value is None:
+        return set()
     keys = {''.join(key.split()).upper() for key in value.split(',')} - {''}
+    if not keys:
+        raise ValueError("at least one primary-key fingerprint is required")
     for key in keys:
         if not re.fullmatch(r'[0-9A-F]{40}|[0-9A-F]{64}', key):
             raise ValueError(f"{key} is not a full primary-key fingerprint")
@@ -378,7 +382,7 @@ def verify_shasums_signature(
     # which pubkeys convince us that this sums file is legitimate. In other words,
     # which pubkeys within the Bitcoin community do we trust for the purposes of
     # binary verification?
-    trusted_keys = parse_trusted_keys(args.trusted_keys or '')
+    trusted_keys = parse_trusted_keys(args.trusted_keys)
 
     # Tally signatures and make sure we have enough goods to fulfill
     # our threshold. Without --trusted-keys, every key in the local keyring
@@ -388,7 +392,7 @@ def verify_shasums_signature(
         if sig.trusted or (sig.fingerprint and sig.fingerprint.upper() in trusted_keys)
     ]
     good_untrusted = [sig for sig in good if sig not in good_trusted]
-    counted = good_trusted if trusted_keys else good
+    counted = good_trusted if args.trusted_keys is not None else good
     num_trusted = len({sig.fingerprint for sig in counted if sig.fingerprint})
     log.info(f"got good signatures from {num_trusted} distinct key(s)")
 
@@ -658,8 +662,8 @@ def main():
         help='which keyserver to use',
     )
     parser.add_argument(
-        '--trusted-keys', action='store', nargs='?',
-        default=os.environ.get('BINVERIFY_TRUSTED_KEYS', ''),
+        '--trusted-keys', action='store',
+        default=os.environ.get('BINVERIFY_TRUSTED_KEYS'),
         help=(
             'A list of trusted signer GPG primary-key fingerprints, separated by '
             'commas. Not "trusted keys" in the GPG sense.'),
@@ -703,7 +707,7 @@ def main():
 
     args = parser.parse_args()
     try:
-        parse_trusted_keys(args.trusted_keys or '')
+        parse_trusted_keys(args.trusted_keys)
     except ValueError as e:
         parser.error(f"--trusted-keys: {e}")
     if args.quiet:
