@@ -29,6 +29,10 @@ It first checks if the checksum file is valid based upon a plurality of signatur
 then downloads the release files specified in the checksum file, and checks if the
 hashes of the release files are as expected.
 
+Each signer counts once toward the threshold, however many signatures it made. By
+default, every key in your local GPG keyring counts. With `--trusted-keys`, only the
+listed primary-key fingerprints and keys that GPG itself trusts count.
+
 If we encounter pubkeys in the signature file that we do not recognize, the script
 can prompt the user as to whether they'd like to download the pubkeys. To enable
 this behavior, use the `--import-keys` flag.
@@ -53,8 +57,8 @@ Get JSON output and don't prompt for user input (no auto key import):
 ./contrib/verify-binaries/verify.py --json pub 23.0-rc5-linux-gnu
 ```
 
-Rely only on local GPG state and manually specified primary-key fingerprints,
-while requiring a threshold of at least 10 distinct trusted signers:
+Count only the listed primary-key fingerprints (and keys GPG already trusts),
+while requiring a threshold of at least 10 distinct signers:
 ```sh
 ./contrib/verify-binaries/verify.py \
     --trusted-keys 74E2DEF5D77260B98BC19438099BAD163C70FBFA,9D3CC86A72F8494342EA5FD10A41BDC3F4FAFF1C \
