@@ -16,6 +16,7 @@
 #include <univalue.h>
 #include <util/bip32.h>
 #include <util/translation.h>
+#include <wallet/codex32.h>
 #include <wallet/context.h>
 #include <wallet/export.h>
 #include <wallet/receive.h>
@@ -26,7 +27,9 @@
 
 #include <algorithm>
 #include <optional>
+#include <span>
 #include <string_view>
+#include <vector>
 
 
 namespace wallet {
@@ -836,13 +839,63 @@ static RPCMethod createwalletdescriptor()
     };
 }
 
+/** Recover a BIP 32 master key from a codex32 secret, or from exactly k codex32 shares of one. */
+static CExtKey ExtKeyFromCodex32(const UniValue& strings)
+{
+    if (strings.empty()) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "codex32 needs a codex32 secret or its shares");
+    }
+    std::vector<codex32::Result> shares;
+    for (size_t i = 0; i < strings.size(); ++i) {
+        codex32::Result share{strings[i].get_str()};
+        if (!share.IsValid()) {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Invalid codex32 string at position %d: %s", i, codex32::ErrorString(share.error())));
+        }
+        shares.push_back(std::move(share));
+    }
+
+    // A codex32 secret holds the master seed itself. Shares are combined to recover it.
+    std::optional<codex32::Result> secret;
+    if (shares.size() == 1 && shares[0].GetShareIndex() == 's') {
+        secret = std::move(shares[0]);
+    } else {
+        for (const auto& share : shares) {
+            if (share.GetShareIndex() == 's') {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "A codex32 secret (share index s) must be given on its own");
+            }
+        }
+        secret.emplace(shares, 's');
+        if (secret->error() == codex32::TOO_FEW_SHARES || secret->error() == codex32::TOO_MANY_SHARES) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Recovering this codex32 secret takes exactly %d shares, got %d", shares[0].GetK(), shares.size()));
+        }
+        if (!secret->IsValid()) {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Could not recover codex32 secret: %s", codex32::ErrorString(secret->error())));
+        }
+    }
+
+    const std::vector<unsigned char> seed{secret->GetPayload()};
+    CExtKey master;
+    master.SetSeed(std::as_bytes(std::span{seed}));
+    return master;
+}
+
 RPCMethod addhdkey()
 {
     return RPCMethod{
         "addhdkey",
         "Add a BIP 32 HD key to the wallet that can be used with 'createwalletdescriptor'\n",
         {
-            {"hdkey", RPCArg::Type::STR, RPCArg::DefaultHint{"Automatically generated new key"}, "The BIP 32 extended private key to add. If none is provided, a randomly generated one will be added."},
+            {"hdkey", RPCArg::Type::STR, RPCArg::DefaultHint{"Automatically generated new key"}, "The BIP 32 extended private key to add. If neither this nor codex32 is provided, a randomly generated one will be added."},
+            {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",
+                {
+                    {"codex32", RPCArg::Type::ARR, RPCArg::Optional::OMITTED, "A BIP 93 codex32 secret, or exactly k codex32 shares of one secret. "
+                        "The HD key is derived from the master seed they encode. Cannot be used with hdkey.",
+                        {
+                            {"codex32_string", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "A codex32 secret or share"},
+                        },
+                    },
+                },
+                RPCArgOptions{.oneline_description="options"}},
         },
         RPCResult{
             RPCResult::Type::OBJ, "", "",
@@ -851,7 +904,10 @@ RPCMethod addhdkey()
             },
         },
         RPCExamples{
-            HelpExampleCli("addhdkey", "xprv") + HelpExampleRpc("addhdkey", R"("xprv")")
+            HelpExampleCli("addhdkey", "xprv") + HelpExampleRpc("addhdkey", R"("xprv")") +
+            "\nAdd the HD key encoded by a codex32 secret, or recovered from its shares\n" +
+            HelpExampleCli("-named addhdkey", R"(codex32='["ms10testsxxxxxxxxxxxxxxxxxxxxxxxxxx4nzvca9cmczlw"]')") +
+            HelpExampleCli("-named addhdkey", R"(codex32='["ms12namea320zyxwvutsrqpnmlkjhgfedcaxrpp870hkkqrm", "ms12namecacdefghjklmnpqrstuvwxyz023ftr2gdzmpy6pn"]')")
         },
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
         {
@@ -875,6 +931,21 @@ RPCMethod addhdkey()
                     } else {
                         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Could not parse HD key");
                     }
+                }
+            }
+
+            if (!request.params[1].isNull()) {
+                const UniValue& options{request.params[1].get_obj()};
+                RPCTypeCheckObj(options,
+                    {
+                        {"codex32", UniValueType(UniValue::VARR)},
+                    },
+                    /*fAllowNull=*/true, /*fStrict=*/true);
+                if (!options["codex32"].isNull()) {
+                    if (hdkey) {
+                        throw JSONRPCError(RPC_INVALID_PARAMETER, "Cannot use both hdkey and codex32");
+                    }
+                    hdkey = ExtKeyFromCodex32(options["codex32"]);
                 }
             }
 
