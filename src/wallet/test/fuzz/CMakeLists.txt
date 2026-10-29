@@ -4,6 +4,7 @@
 
 target_sources(fuzz
   PRIVATE
+    codex32.cpp
     coincontrol.cpp
     coinselection.cpp
     crypter.cpp
