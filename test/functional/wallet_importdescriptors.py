@@ -354,6 +354,26 @@ class ImportDescriptorsTest(BitcoinTestFramework):
                              error_message="Cannot import descriptor without private keys to a wallet with private keys enabled",
                              wallet=wallet)
 
+    def test_reimport_with_known_master_key(self):
+        self.log.info("Test that reimporting a descriptor updates it after the wallet learns its master key")
+        self.nodes[0].createwallet(wallet_name="reimport_source")
+        source = self.nodes[0].get_wallet_rpc("reimport_source")
+        master_xprv = source.gethdkeys(private=True)[0]["xprv"]
+        account = source.derivehdkey("m/87h/1h/0h", private=True)
+        desc = descsum_create(f"wpkh({account['origin']}{account['xprv']}/0/*)")
+        range_warning = "Range not given, using default keypool range"
+
+        self.nodes[0].createwallet(wallet_name="reimport", blank=True)
+        wallet = self.nodes[0].get_wallet_rpc("reimport")
+        self.test_importdesc({"timestamp": "now", "desc": desc, "active": True}, success=True, warnings=[range_warning], wallet=wallet)
+        wallet.addhdkey(master_xprv)
+        num_descs = len(wallet.listdescriptors()["descriptors"])
+
+        self.test_importdesc({"timestamp": "now", "desc": desc, "active": False}, success=True, warnings=[range_warning], wallet=wallet)
+        descs = wallet.listdescriptors()["descriptors"]
+        assert_equal(len(descs), num_descs)
+        assert not any(d["active"] for d in descs)
+
     def run_test(self):
         self.log.info('Setting up wallets')
         self.nodes[0].createwallet(wallet_name='w0', disable_private_keys=False)
@@ -1216,6 +1236,7 @@ class ImportDescriptorsTest(BitcoinTestFramework):
         self.test_per_item_errors_are_reported_in_order()
         self.test_rescan_fails_import()
         self.test_import_noprivs()
+        self.test_reimport_with_known_master_key()
 
 if __name__ == '__main__':
     ImportDescriptorsTest(__file__).main()

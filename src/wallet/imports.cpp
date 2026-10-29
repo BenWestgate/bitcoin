@@ -123,15 +123,18 @@ ImportResult ImportDescriptor(CWallet& wallet, const ImportDescriptorRequest& re
 
     std::pair<std::map<CExtPubKey, CExtKey>, std::map<CPubKey, CKey>> wallet_keys = wallet.GetKnownKeys();
     for (size_t j = 0; j < parsed_descs.size(); ++j) {
-        auto parsed_desc = std::move(parsed_descs[j]);
+        std::shared_ptr<Descriptor> parsed_desc = std::move(parsed_descs[j]);
         if (parsed_descs.size() == 2) {
             desc_internal = j == 1;
         } else if (parsed_descs.size() > 2) {
             CHECK_NONFATAL(!desc_internal);
         }
 
-        // Substitute any xpubs with xprvs if known to the wallet
-        parsed_desc->SubstituteMasterExtPubs(wallet_keys.first);
+        // Substitute any xpubs with xprvs if known to the wallet, unless the wallet already has this descriptor.
+        // Substituting changes the descriptor string, so the import would add a copy instead of updating the existing one.
+        if (!wallet.GetDescriptorScriptPubKeyMan(WalletDescriptor(parsed_desc, 0, 0, 0, 0))) {
+            parsed_desc->SubstituteMasterExtPubs(wallet_keys.first);
+        }
 
         // Insert into keys any private keys that the wallet already knows
         // This needs to be done after xpubs have been substituted
