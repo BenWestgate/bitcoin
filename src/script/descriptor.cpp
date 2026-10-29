@@ -33,6 +33,7 @@
 #include <util/vector.h>
 
 #include <algorithm>
+#include <array>
 #include <compare>
 #include <iterator>
 #include <map>
