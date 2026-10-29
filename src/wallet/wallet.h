@@ -428,6 +428,9 @@ private:
     //! Set of both spent and unspent transaction outputs owned by this wallet
     std::unordered_map<COutPoint, WalletTXO, SaltedOutpointHasher> m_txos GUARDED_BY(cs_wallet);
 
+    //! Features of the last client to decrypt this wallet
+    std::optional<uint64_t> m_last_decrypted_features GUARDED_BY(cs_wallet);
+
     /**
      * Catch wallet up to current chain, scanning new blocks, updating the best
      * block locator and m_last_block_processed, and registering for
@@ -920,7 +923,7 @@ public:
 
     /** Prepends the wallet name in logging output to ease debugging in multi-wallet use cases */
     template <typename... Params>
-    void WalletLogPrintf(util::ConstevalFormatString<sizeof...(Params)> wallet_fmt, const Params&... params) const
+    void WalletLogPrintf(util::log::FormatString<sizeof...(Params)> wallet_fmt, const Params&... params) const
     {
         LogInfo("[%s] %s", LogName(), tfm::format(wallet_fmt, params...));
     };
@@ -928,9 +931,9 @@ public:
     void LogStats() const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
     {
         AssertLockHeld(cs_wallet);
-        WalletLogPrintf("setKeyPool.size() = %u\n",      GetKeyPoolSize());
-        WalletLogPrintf("mapWallet.size() = %u\n",       mapWallet.size());
-        WalletLogPrintf("m_address_book.size() = %u\n",  m_address_book.size());
+        WalletLogPrintf("setKeyPool.size() = %u",      GetKeyPoolSize());
+        WalletLogPrintf("mapWallet.size() = %u",       mapWallet.size());
+        WalletLogPrintf("m_address_book.size() = %u",  m_address_book.size());
     };
 
     //! Returns all unique ScriptPubKeyMans in m_internal_spk_managers and m_external_spk_managers
@@ -1083,6 +1086,9 @@ public:
 
     //! Disconnect chain notifications and wait for all notifications to be processed
     void DisconnectChainNotifications();
+
+    //! Set the features of the last client to decrypt this wallet
+    void SetLastDecryptedFeatures(uint64_t features) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 };
 
 /**

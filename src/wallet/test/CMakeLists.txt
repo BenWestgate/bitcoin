@@ -8,6 +8,7 @@ target_sources(test_bitcoin
   PRIVATE
     init_test_fixture.cpp
     wallet_test_fixture.cpp
+    codex32_tests.cpp
     db_tests.cpp
     coinselector_tests.cpp
     coinselection_tests.cpp
@@ -16,6 +17,7 @@ target_sources(test_bitcoin
     init_tests.cpp
     ismine_tests.cpp
     psbt_wallet_tests.cpp
+    rescan_tests.cpp
     scriptpubkeyman_tests.cpp
     spend_tests.cpp
     wallet_crypto_tests.cpp

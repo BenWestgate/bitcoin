@@ -85,9 +85,7 @@ class PSBTTest(BitcoinTestFramework):
             ["-changetype=legacy", "-maxfeerate=1"],
             ["-maxfeerate=1"]
         ]
-        # whitelist peers to speed up tx relay / mempool sync
-        for args in self.extra_args:
-            args.append("-whitelist=noban@127.0.0.1")
+        self.noban_tx_relay = True  # faster tx relay
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
@@ -1330,8 +1328,9 @@ class PSBTTest(BitcoinTestFramework):
 
         # Combiner test
         for combiner in combiners:
-            combined = self.nodes[2].combinepsbt(combiner['combine'])
-            assert_equal(combined, combiner['result'])
+            for psbts in (combiner['combine'], combiner['combine'][::-1]):
+                combined = self.nodes[2].combinepsbt(psbts)
+                assert_equal(combined, combiner['result'])
 
         # Empty combiner test
         assert_raises_rpc_error(-8, "Parameter 'txs' cannot be empty", self.nodes[0].combinepsbt, [])

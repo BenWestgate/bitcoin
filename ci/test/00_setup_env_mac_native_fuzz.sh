@@ -6,7 +6,6 @@
 
 export LC_ALL=C.UTF-8
 
-export CONTAINER_NAME="ci_mac_native_fuzz"  # macos does not use a container, but the env var is needed for logging
 export CMAKE_GENERATOR="Ninja"
 printf -v BITCOIN_CONFIG "%q " \
  -DBUILD_FOR_FUZZING=ON \
@@ -19,4 +18,4 @@ export OSX_SDK=""
 export RUN_UNIT_TESTS=false
 export RUN_FUNCTIONAL_TESTS=false
 export RUN_FUZZ_TESTS=true
-export GOAL="all"
+export BUILD_TARGETS="all"

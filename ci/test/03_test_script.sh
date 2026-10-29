@@ -16,10 +16,6 @@ fi
 cd "${BASE_ROOT_DIR}"
 
 export PATH="/path_with space:${PATH}"
-export ASAN_OPTIONS="detect_leaks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1"
-export LSAN_OPTIONS="suppressions=${BASE_ROOT_DIR}/test/sanitizer_suppressions/lsan:print_suppressions=0"
-export TSAN_OPTIONS="suppressions=${BASE_ROOT_DIR}/test/sanitizer_suppressions/tsan:halt_on_error=1:second_deadlock_stack=1"
-export UBSAN_OPTIONS="suppressions=${BASE_ROOT_DIR}/test/sanitizer_suppressions/ubsan:print_stacktrace=1:halt_on_error=1:report_error_type=1"
 
 echo "Number of available processing units: $(nproc)"
 if [ "$CI_OS_NAME" == "macos" ]; then
@@ -99,9 +95,9 @@ if [ "$DOWNLOAD_PREVIOUS_RELEASES" = "true" ]; then
   test/get_previous_releases.py
 fi
 
-BITCOIN_CONFIG_ALL="-DCMAKE_COMPILE_WARNING_AS_ERROR=ON -DBUILD_BENCH=ON -DBUILD_FUZZ_BINARY=ON"
+BITCOIN_CONFIG_ALL=(-DCMAKE_COMPILE_WARNING_AS_ERROR=ON -DCMAKE_INSTALL_PREFIX="$BASE_OUTDIR" -Werror=dev)
 if [ -z "$NO_DEPENDS" ]; then
-  BITCOIN_CONFIG_ALL="${BITCOIN_CONFIG_ALL} -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_DIR/$HOST/toolchain.cmake"
+  BITCOIN_CONFIG_ALL+=(-DCMAKE_TOOLCHAIN_FILE="$DEPENDS_DIR/$HOST/toolchain.cmake")
 fi
 
 ccache --zero-stats
@@ -109,30 +105,23 @@ ccache --zero-stats
 # Folder where the build is done.
 BASE_BUILD_DIR=${BASE_BUILD_DIR:-$BASE_SCRATCH_DIR/build-$HOST}
 
-BITCOIN_CONFIG_ALL="$BITCOIN_CONFIG_ALL '-DCMAKE_INSTALL_PREFIX=$BASE_OUTDIR' -Werror=dev"
-
 if [[ "${RUN_IWYU}" == true || "${RUN_TIDY}" == true ]]; then
-  BITCOIN_CONFIG_ALL="$BITCOIN_CONFIG_ALL -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+  BITCOIN_CONFIG_ALL+=(-DCMAKE_EXPORT_COMPILE_COMMANDS=ON)
 fi
 
-eval "CMAKE_ARGS=($BITCOIN_CONFIG_ALL $BITCOIN_CONFIG)"
-cmake -S "$BASE_ROOT_DIR" -B "$BASE_BUILD_DIR" "${CMAKE_ARGS[@]}" || (
+eval "BITCOIN_CONFIG=($BITCOIN_CONFIG)"
+cmake -S "$BASE_ROOT_DIR" -B "$BASE_BUILD_DIR" "${BITCOIN_CONFIG_ALL[@]}" "${BITCOIN_CONFIG[@]}" || (
   cd "${BASE_BUILD_DIR}"
   # shellcheck disable=SC2046
   cat $(cmake -P "${BASE_ROOT_DIR}/ci/test/GetCMakeLogFiles.cmake")
   false
 )
 
-BUILD_TARGETS="${GOAL}"
-if [[ "${GOAL}" != all && "${GOAL}" != *codegen* ]]; then
-  BUILD_TARGETS="all ${GOAL}"
-fi
+eval "BUILD_TARGETS=($BUILD_TARGETS)"
 
-# shellcheck disable=SC2086
-cmake --build "${BASE_BUILD_DIR}" "$MAKEJOBS" --target $BUILD_TARGETS || (
+cmake --build "${BASE_BUILD_DIR}" "$MAKEJOBS" --target "${BUILD_TARGETS[@]}" || (
   echo "Build failure. Verbose build follows."
-  # shellcheck disable=SC2086
-  cmake --build "${BASE_BUILD_DIR}" -j1 --target $BUILD_TARGETS --verbose
+  cmake --build "${BASE_BUILD_DIR}" -j1 --target "${BUILD_TARGETS[@]}" --verbose
   false
 )
 
@@ -168,6 +157,8 @@ if [ -n "${CI_LIMIT_STACK_SIZE}" ]; then
   ulimit -s 512
 fi
 
+WITH_SANITIZER_ENV=(python3 "${BASE_BUILD_DIR}/test/with_sanitizer_env.py")
+
 if [[ ${BARE_METAL_RISCV} == "true" ]]; then
     export BASE_BUILD_DIR
     "${BASE_ROOT_DIR}/ci/test/link-riscv.sh"
@@ -190,7 +181,8 @@ if [ "$RUN_UNIT_TESTS" = "true" ]; then
   DIR_UNIT_TEST_DATA="${DIR_UNIT_TEST_DATA}" \
   LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
   CTEST_OUTPUT_ON_FAILURE=ON \
-  ctest --test-dir "${BASE_BUILD_DIR}" \
+  "${WITH_SANITIZER_ENV[@]}" \
+    ctest --test-dir "${BASE_BUILD_DIR}" \
     --stop-on-failure \
     "${MAKEJOBS}" \
     --timeout $(( TEST_RUNNER_TIMEOUT_FACTOR * 60 ))

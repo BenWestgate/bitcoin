@@ -146,11 +146,9 @@ jobs:
 
       - name: Clang version
         run: |
-          # Use the latest Xcode supported by the version of macOS denoted in
-          # doc/release-notes-empty-template.md and providing at least the
-          # minimum clang version denoted in doc/dependencies.md.
-          # See: https://developer.apple.com/documentation/xcode-release-notes/xcode-16_2-release-notes
-          sudo xcode-select --switch /Applications/Xcode_16.2.app
+          # Use the minimum Xcode version denoted in doc/dependencies.md.
+          # See: https://developer.apple.com/documentation/xcode-release-notes/xcode-26_3-release-notes
+          sudo xcode-select --switch /Applications/Xcode_26.3.app
           clang --version
 
       - name: Install Homebrew packages
@@ -552,7 +550,7 @@ jobs:
         run: sed -i "s|\${INSTALL_BCC_TRACING_TOOLS}|true|g" ./ci/test/00_setup_env_native_asan.sh
 
       - name: Set mmap_rnd_bits
-        if: ${{ env.CONTAINER_NAME == 'ci_native_tsan' || env.CONTAINER_NAME == 'ci_native_msan' || env.CONTAINER_NAME == 'ci_native_fuzz_msan' }}
+        if: ${{ env.CONTAINER_NAME == 'ci_native_tsan' || env.CONTAINER_NAME == 'ci_native_msan' || env.CONTAINER_NAME == 'ci_native_fuzz_with_msan' }}
         # Prevents crashes due to high ASLR entropy
         run: sudo sysctl -w vm.mmap_rnd_bits=28
 

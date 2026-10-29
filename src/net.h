@@ -30,6 +30,7 @@
 #include <sync.h>
 #include <uint256.h>
 #include <util/check.h>
+#include <util/not_null.h>
 #include <util/sock.h>
 #include <util/threadinterrupt.h>
 
@@ -79,6 +80,8 @@ inline constexpr size_t MAX_PRIVATE_BROADCAST_CONNECTIONS{64};
 inline constexpr bool DEFAULT_LISTEN = true;
 /** The maximum number of peer connections to maintain. */
 inline constexpr unsigned int DEFAULT_MAX_PEER_CONNECTIONS{200};
+/** Maximum value of -maxconnections */
+inline constexpr int MAX_PEER_CONNECTIONS{2'000};
 /** Default percentage of inbound connection slots that tx-relaying peers can use */
 inline constexpr int DEFAULT_FULL_RELAY_INBOUND_PCT{50};
 /** The default for -maxuploadtarget. 0 = Unlimited */
@@ -684,7 +687,7 @@ class CNode
 public:
     /** Transport serializer/deserializer. The receive side functions are only called under cs_vRecv, while
      * the sending side functions are only called under cs_vSend. */
-    const std::unique_ptr<Transport> m_transport;
+    const util::NotNullUniquePtr<Transport> m_transport;
 
     const NetPermissionFlags m_permission_flags;
 
@@ -749,6 +752,8 @@ public:
     const uint64_t nKeyedNetGroup;
     std::atomic_bool fPauseRecv{false};
     std::atomic_bool fPauseSend{false};
+    /** When was fPauseSend last set from false to true */
+    std::atomic<NodeClock::time_point> m_pause_send_since{NodeClock::epoch};
 
     /** Network key used to prevent fingerprinting our node across networks.
      *  Influenced by the network and the bind address (+ bind port for inbounds) */

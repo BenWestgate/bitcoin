@@ -149,6 +149,8 @@ class TestNode():
             "-debugexclude=rand",
             "-uacomment=testnode%d" % i,  # required for subversion uniqueness across peers
         ]
+        if use_gui:
+            self.args.append("-lang=nl_NL")  # Set language to try to trigger translation bugs
         if uses_wallet is not None and not uses_wallet:
             self.args.append("-disablewallet")
 
@@ -299,7 +301,7 @@ class TestNode():
                 # on stderr, which the test framework treats as a failure.
                 # Fall back to Qt's poll-based event dispatcher instead.
                 subp_env.setdefault("QT_NO_GLIB", "1")
-            subp_env.setdefault("LC_ALL", "nl_NL.UTF-8") # Set language to try to trigger translation bugs
+            subp_env.setdefault("LC_ALL", "C.UTF-8")  # Qt prints a warning to stderr if the locale is not UTF-8
             if sys.platform.startswith("linux") and "XDG_RUNTIME_DIR" not in subp_env:
                 # Qt prints warnings to stderr when XDG_RUNTIME_DIR is unset or has wrong
                 # permissions (e.g. in CI environments without a desktop session), which
@@ -353,8 +355,8 @@ class TestNode():
 
     def wait_for_rpc_connection(self, *, wait_for_import=True):
         """Sets up an RPC connection to the bitcoind process. Returns False if unable to connect."""
-        # Poll at a rate of four times per second
-        poll_per_s = 4
+        # Poll at a rate of twenty times per second
+        poll_per_s = 20
 
         suppressed_errors = collections.defaultdict(int)
         latest_error = None
@@ -362,7 +364,8 @@ class TestNode():
             suppressed_errors[category] += 1
             return (category, repr(e))
 
-        for _ in range(poll_per_s * self.rpc_timeout):
+        stop_time = time.monotonic() + self.rpc_timeout
+        while time.monotonic() <= stop_time:
             if self.process.poll() is not None:
                 # Attach abrupt shutdown error/s to the exception message
                 self.stderr.seek(0)
@@ -588,6 +591,8 @@ class TestNode():
 
     @property
     def chain_dir(self) -> str:
+        if self.chain == "main":
+            return ""
         if self.chain != "signet":
             return self.chain
         for arg in self.extra_args:
@@ -907,7 +912,7 @@ class TestNode():
         self.mocktime += seconds
         self.setmocktime(self.mocktime)
 
-    def wait_until(self, test_function, timeout=60, check_interval=0.05):
+    def wait_until(self, test_function, *, timeout=60, check_interval=0.05):
         return wait_until_helper_internal(test_function, timeout=timeout, timeout_factor=self.timeout_factor, check_interval=check_interval)
 
 class TestNodeCLIAttr:
