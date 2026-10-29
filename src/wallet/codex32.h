@@ -9,8 +9,8 @@
 //
 // For more information, see BIP 93.
 
-#ifndef BITCOIN_CODEX32_H
-#define BITCOIN_CODEX32_H
+#ifndef BITCOIN_WALLET_CODEX32_H
+#define BITCOIN_WALLET_CODEX32_H
 
 #include <stdint.h>
 #include <array>
@@ -115,4 +115,4 @@ private:
 
 } // namespace codex32
 
-#endif // BITCOIN_CODEX32_H
+#endif // BITCOIN_WALLET_CODEX32_H

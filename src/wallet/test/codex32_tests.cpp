@@ -3,8 +3,8 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <bech32.h>
-#include <codex32.h>
 #include <test/util/str.h>
+#include <wallet/codex32.h>
 
 #include <boost/test/unit_test.hpp>
 
