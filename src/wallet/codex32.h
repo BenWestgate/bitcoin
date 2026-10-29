@@ -5,21 +5,21 @@
 // codex32 is a string encoding format for BIP-32 seeds. Like bech32 and
 // bech32m, the outputs consist of a human-readable part (alphanumeric),
 // a separator character (1), and a base32 data section. The final 13
-// characters are a checksum.
+// characters are a checksum (15 for 512-bit seeds).
 //
 // For more information, see BIP 93.
 
 #ifndef BITCOIN_WALLET_CODEX32_H
 #define BITCOIN_WALLET_CODEX32_H
 
-#include <stdint.h>
-#include <array>
-#include <cassert>
-#include <string>
-#include <vector>
-
 #include <bech32.h>
 #include <util/strencodings.h>
+
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
 
 namespace codex32
 {
@@ -35,6 +35,7 @@ enum Error {
     INVALID_K,
     INVALID_SHARE_IDX,
     TOO_FEW_SHARES,
+    TOO_MANY_SHARES,
     DUPLICATE_SHARE,
     MISMATCH_K,
     MISMATCH_ID,
@@ -51,13 +52,15 @@ public:
 
     /** Construct a codex32 directly from a HRP, k, seed ID, share index and payload
      *
-     * This constructor requires the hrp to be the lowercase string "ms", but will
-     * ignore the case of `id` and `share_idx`. */
+     * This constructor requires the hrp to be the lowercase string "ms" and the
+     * payload to be 16, 20, 24, 28, 32 or 64 bytes, but will ignore the case of
+     * `id` and `share_idx`. */
     Result(std::string&& hrp, size_t k, const std::string& id, char share_idx, const std::vector<unsigned char>& data);
 
     /** Construct a codex32 result by interpolating a set of input shares to obtain an output share
      *
-     * Requires that all input shares have the same k and seed ID */
+     * Requires exactly k valid input shares with the same k, seed ID and length,
+     * and distinct share indices. Use output_idx 's' to recover the secret. */
     Result(const std::vector<Result>& shares, char output_idx);
 
     /** Boolean indicating whether the data was successfully parsed.

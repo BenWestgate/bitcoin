@@ -6,12 +6,15 @@
 #include <wallet/codex32.h>
 
 #include <bech32.h>
-#include <util/vector.h>
+#include <util/strencodings.h>
 
+#include <algorithm>
 #include <array>
-#include <assert.h>
-#include <numeric>
-#include <optional>
+#include <cassert>
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace codex32
 {
@@ -20,6 +23,29 @@ namespace
 {
 
 typedef bech32::internal::data data;
+
+// BIP 93 string lengths, which encode 16, 20, 24, 28, 32 and 64 byte master seeds.
+constexpr std::array<size_t, 6> VALID_LENGTHS{48, 54, 61, 67, 74, 127};
+constexpr std::array<size_t, 6> VALID_SEED_LENGTHS{16, 20, 24, 28, 32, 64};
+
+// The regular checksum covers expanded codewords (expanded HRP followed by the
+// data part) of up to 93 values. Longer codewords use the long checksum.
+constexpr size_t MAX_REGULAR_EXPANDED_LENGTH = 93;
+constexpr size_t MIN_LONG_EXPANDED_LENGTH = 96;
+constexpr size_t MAX_LONG_EXPANDED_LENGTH = 1023;
+
+size_t ExpandedLength(const std::string& hrp, size_t data_part_len)
+{
+    // bech32 expands each HRP character to two values, plus a zero separator.
+    return hrp.size() * 2 + 1 + data_part_len;
+}
+
+/** CHARSET_REV lookup that treats characters outside of ASCII as invalid. */
+int8_t CharsetRev(char c)
+{
+    const unsigned char uc = c;
+    return uc < 128 ? bech32::internal::CHARSET_REV[uc] : -1;
+}
 
 // Build multiplication and logarithm tables for GF(32).
 //
@@ -233,6 +259,7 @@ std::string ErrorString(Error e) {
     case INVALID_K: return "invalid threshold (k) value";
     case INVALID_SHARE_IDX: return "invalid share index";
     case TOO_FEW_SHARES: return "tried to derive a share but did not have enough input shares";
+    case TOO_MANY_SHARES: return "tried to derive a share but had more input shares than the threshold (k)";
     case DUPLICATE_SHARE: return "tried to derive a share but two input shares had the same index";
     case MISMATCH_K: return "tried to derive a share but input shares had inconsistent threshold (k) values";
     case MISMATCH_ID: return "tried to derive a share but input shares had inconsistent seed IDs";
@@ -245,7 +272,7 @@ std::string ErrorString(Error e) {
 std::string Result::Encode() const {
     assert(IsValid());
 
-    const data checksum = m_data.size() <= 80
+    const data checksum = ExpandedLength(m_hrp, m_data.size() + CODEX32_GEN.size()) <= MAX_REGULAR_EXPANDED_LENGTH
         ? CreateChecksum(m_hrp, m_data, CODEX32_GEN, CODEX32_M)
         : CreateChecksum(m_hrp, m_data, CODEX32_LONG_GEN, CODEX32_LONG_M);
     return bech32::internal::Encode(m_hrp, m_data, checksum);
@@ -255,9 +282,10 @@ std::string Result::Encode() const {
 Result::Result(const std::string& str) {
     m_valid = OK;
 
-    auto res = bech32::internal::Decode(str, 127, 6);
+    const size_t max_length = VALID_LENGTHS.back();
+    auto res = bech32::internal::Decode(str, max_length, 6);
 
-    if (str.size() > 127) {
+    if (str.size() > max_length) {
         m_valid = INVALID_LENGTH;
         // Early return since if we failed the max size check, Decode did not give us any data.
         return;
@@ -268,25 +296,24 @@ Result::Result(const std::string& str) {
         m_valid = INVALID_HRP;
         // Early return since if the HRP is wrong, all bets are off and no point continuing
         return;
+    } else if (std::find(VALID_LENGTHS.begin(), VALID_LENGTHS.end(), str.size()) == VALID_LENGTHS.end()) {
+        // Every valid length decodes to a supported seed length, with an
+        // incomplete group of 4 bits or less at the end of the payload.
+        m_valid = INVALID_LENGTH;
+        return;
     }
     m_hrp = std::move(res.first);
 
-    if (res.second.size() >= 45 && res.second.size() <= 90) {
-        // If, after converting back to base-256, we have 5 or more bits of data
-        // remaining, it means that we had an entire character of useless data,
-        // which shouldn't have been included.
-        if (((res.second.size() - 6 - 13) * 5) % 8 > 4) {
-            m_valid = INVALID_LENGTH;
-        } else if (VerifyChecksum(m_hrp, res.second, CODEX32_GEN, CODEX32_M)) {
-            m_data = data(res.second.begin(), res.second.end() - 13);
+    const size_t expanded_length = ExpandedLength(m_hrp, res.second.size());
+    if (expanded_length <= MAX_REGULAR_EXPANDED_LENGTH) {
+        if (VerifyChecksum(m_hrp, res.second, CODEX32_GEN, CODEX32_M)) {
+            m_data = data(res.second.begin(), res.second.end() - CODEX32_GEN.size());
         } else {
             m_valid = BAD_CHECKSUM;
         }
-    } else if (res.second.size() >= 96 && res.second.size() <= 124) {
-        if (((res.second.size() - 6 - 15) * 5) % 8 > 4) {
-            m_valid = INVALID_LENGTH;
-        } else if (VerifyChecksum(m_hrp, res.second, CODEX32_LONG_GEN, CODEX32_LONG_M)) {
-            m_data = data(res.second.begin(), res.second.end() - 15);
+    } else if (expanded_length >= MIN_LONG_EXPANDED_LENGTH && expanded_length <= MAX_LONG_EXPANDED_LENGTH) {
+        if (VerifyChecksum(m_hrp, res.second, CODEX32_LONG_GEN, CODEX32_LONG_M)) {
+            m_data = data(res.second.begin(), res.second.end() - CODEX32_LONG_GEN.size());
         } else {
             m_valid = BAD_CHECKSUM;
         }
@@ -318,7 +345,10 @@ Result::Result(std::string&& hrp, size_t k, const std::string& id, char share_id
     if (id.size() != 4) {
         m_valid = INVALID_ID_LEN;
     }
-    int8_t sidx = bech32::internal::CHARSET_REV[(unsigned char) share_idx];
+    if (std::find(VALID_SEED_LENGTHS.begin(), VALID_SEED_LENGTHS.end(), data.size()) == VALID_SEED_LENGTHS.end()) {
+        m_valid = INVALID_LENGTH;
+    }
+    int8_t sidx = CharsetRev(share_idx);
     if (sidx == -1) {
         m_valid = INVALID_SHARE_IDX;
     }
@@ -327,7 +357,7 @@ Result::Result(std::string&& hrp, size_t k, const std::string& id, char share_id
         m_valid = INVALID_SHARE_IDX;
     }
     for (size_t i = 0; i < id.size(); ++i) {
-        if (bech32::internal::CHARSET_REV[(unsigned char) id[i]] == -1) {
+        if (CharsetRev(id[i]) == -1) {
             m_valid = INVALID_ID_CHAR;
         }
     }
@@ -339,10 +369,10 @@ Result::Result(std::string&& hrp, size_t k, const std::string& id, char share_id
 
     m_data.reserve(6 + ((data.size() * 8) + 4) / 5);
     m_data.push_back(bech32::internal::CHARSET_REV['0' + k]);
-    m_data.push_back(bech32::internal::CHARSET_REV[(unsigned char) id[0]]);
-    m_data.push_back(bech32::internal::CHARSET_REV[(unsigned char) id[1]]);
-    m_data.push_back(bech32::internal::CHARSET_REV[(unsigned char) id[2]]);
-    m_data.push_back(bech32::internal::CHARSET_REV[(unsigned char) id[3]]);
+    m_data.push_back(CharsetRev(id[0]));
+    m_data.push_back(CharsetRev(id[1]));
+    m_data.push_back(CharsetRev(id[2]));
+    m_data.push_back(CharsetRev(id[3]));
     m_data.push_back(sidx);
     ConvertBits<8, 5, true>([&](unsigned char c) { m_data.push_back(c); }, data.begin(), data.end());
 }
@@ -350,7 +380,7 @@ Result::Result(std::string&& hrp, size_t k, const std::string& id, char share_id
 Result::Result(const std::vector<Result>& shares, char output_idx) {
     m_valid = OK;
 
-    int8_t oidx = bech32::internal::CHARSET_REV[(unsigned char) output_idx];
+    int8_t oidx = CharsetRev(output_idx);
     if (oidx == -1) {
         m_valid = INVALID_SHARE_IDX;
     }
@@ -358,12 +388,11 @@ Result::Result(const std::vector<Result>& shares, char output_idx) {
         m_valid = TOO_FEW_SHARES;
         return;
     }
-    size_t k = shares[0].GetK();
-    if (k > shares.size()) {
-        m_valid = TOO_FEW_SHARES;
-    }
-    if (m_valid != OK) {
-        return;
+    for (const auto& share : shares) {
+        if (!share.IsValid()) {
+            m_valid = share.error();
+            return;
+        }
     }
 
     std::vector<uint8_t> indices;
@@ -389,6 +418,25 @@ Result::Result(const std::vector<Result>& shares, char output_idx) {
                 m_valid = DUPLICATE_SHARE;
             }
         }
+    }
+    if (m_valid != OK) {
+        // Interpolating shares of different lengths would read past the end of the shorter ones.
+        return;
+    }
+
+    const size_t k = shares[0].GetK();
+    if (k == 0) {
+        // An unshared secret has no shares to interpolate.
+        m_valid = INVALID_K;
+    } else if (k > shares.size()) {
+        m_valid = TOO_FEW_SHARES;
+    } else if (k < shares.size()) {
+        // BIP 93 interpolates exactly k shares. Any extra share would change the
+        // result instead of being checked against it.
+        m_valid = TOO_MANY_SHARES;
+    }
+    if (m_valid != OK) {
+        return;
     }
 
     m_hrp = shares[0].m_hrp;
