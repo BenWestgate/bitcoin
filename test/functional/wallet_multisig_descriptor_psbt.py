@@ -146,6 +146,22 @@ class WalletMultisigDescriptorPSBTTest(BitcoinTestFramework):
         assert_approx(watch_only.getbalance(), deposit_amount - (value * 2), vspan=0.001)
         assert_equal(recipient.getbalance(), value * 2)
 
+        self.log.info("A participant who only kept a backup of their HD key can restore a wallet that signs for the multisig...")
+        backup = [hdkey["xprv"] for hdkey in participants[self.N - 1].gethdkeys(private=True) if hdkey["has_private"]]
+        assert_equal(len(backup), 1)
+        restored = self.node.get_wallet_rpc(self.node.createwallet(wallet_name="participant_restored", blank=True)["name"])
+        restored.addhdkey(backup[0])
+        self.import_multisig(restored, xpubs)
+        psbt = watch_only.walletcreatefundedpsbt(inputs=[], outputs={to: value}, feeRate=0.00010)
+        psbt = participants[0].walletprocesspsbt(psbt["psbt"])
+        assert_equal(psbt["complete"], False)
+        psbt = restored.walletprocesspsbt(psbt["psbt"])
+        assert_equal(psbt["complete"], True)
+        watch_only.sendrawtransaction(psbt["hex"])
+        self.generate(self.node, 1)
+        assert_approx(watch_only.getbalance(), deposit_amount - (value * 3), vspan=0.001)
+        assert_equal(recipient.getbalance(), value * 3)
+
 
 if __name__ == "__main__":
     WalletMultisigDescriptorPSBTTest(__file__).main()
