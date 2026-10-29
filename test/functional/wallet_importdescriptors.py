@@ -354,6 +354,32 @@ class ImportDescriptorsTest(BitcoinTestFramework):
                              error_message="Cannot import descriptor without private keys to a wallet with private keys enabled",
                              wallet=wallet)
 
+    def test_import_noprivs_odd_y(self):
+        self.log.info("Test import of an x-only pubkey whose privkey the wallet has with an odd Y coordinate")
+        key = get_generate_key()
+        while not key.pubkey.startswith("03"):
+            key = get_generate_key()
+        xonly = key.pubkey[2:]
+
+        self.nodes[0].createwallet(wallet_name="import_noprivs_odd_y", blank=True)
+        wallet = self.nodes[0].get_wallet_rpc("import_noprivs_odd_y")
+        self.test_importdesc({"timestamp": "now", "desc": descsum_create(f"wpkh({key.privkey})")}, success=True, wallet=wallet)
+        self.test_importdesc({"timestamp": "now", "desc": descsum_create(f"tr({xonly})")},
+                             success=True,
+                             wallet=wallet,
+                             expected_priv=descsum_create(f"tr({key.privkey})"))
+
+        self.log.info("Test that the wallet still knows a privkey stored with an x-only pubkey after reloading")
+        self.nodes[0].createwallet(wallet_name="import_noprivs_odd_y_reload", blank=True)
+        wallet = self.nodes[0].get_wallet_rpc("import_noprivs_odd_y_reload")
+        self.test_importdesc({"timestamp": "now", "desc": descsum_create(f"tr({key.privkey})")}, success=True, wallet=wallet)
+        wallet.unloadwallet()
+        self.nodes[0].loadwallet("import_noprivs_odd_y_reload")
+        self.test_importdesc({"timestamp": "now", "desc": descsum_create(f"wpkh({key.pubkey})")},
+                             success=True,
+                             wallet=wallet,
+                             expected_priv=descsum_create(f"wpkh({key.privkey})"))
+
     def test_reimport_with_known_master_key(self):
         self.log.info("Test that reimporting a descriptor updates it after the wallet learns its master key")
         self.nodes[0].createwallet(wallet_name="reimport_source")
@@ -1236,6 +1262,7 @@ class ImportDescriptorsTest(BitcoinTestFramework):
         self.test_per_item_errors_are_reported_in_order()
         self.test_rescan_fails_import()
         self.test_import_noprivs()
+        self.test_import_noprivs_odd_y()
         self.test_reimport_with_known_master_key()
 
 if __name__ == '__main__':

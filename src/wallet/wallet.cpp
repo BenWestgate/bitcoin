@@ -4445,8 +4445,15 @@ std::pair<std::map<CExtPubKey, CExtKey>, std::map<CPubKey, CKey>> CWallet::GetKn
         w_desc.descriptor->GetPubKeys(desc_pubkeys, desc_xpubs);
         for (const auto& pub : desc_pubkeys) {
             std::optional<CKey> key = desc_spkm->GetKey(pub.GetID());
+            if (!key && pub.IsCompressed()) {
+                // A key in an x-only expression is parsed with an even Y coordinate,
+                // so its private key may be stored under the pubkey with an odd one.
+                for (const CKeyID& keyid : XOnlyPubKey{pub}.GetKeyIDs()) {
+                    if ((key = desc_spkm->GetKey(keyid))) break;
+                }
+            }
             if (!key) continue;
-            keys.emplace(pub, *key);
+            keys.emplace(key->GetPubKey(), *key);
         }
         for (const auto& xpub : desc_xpubs) {
             std::optional<CKey> key = desc_spkm->GetKey(xpub.pubkey.GetID());

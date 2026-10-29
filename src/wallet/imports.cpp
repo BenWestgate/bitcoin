@@ -148,11 +148,15 @@ ImportResult ImportDescriptor(CWallet& wallet, const ImportDescriptorRequest& re
                 if (it == wallet_keys.first.end()) continue;
                 keys.keys.emplace(it->first.pubkey.GetID(), it->second.key);
             }
-            for (const CPubKey& pub : desc_pubs) {
-                const auto& it = wallet_keys.second.find(pub);
-                if (it == wallet_keys.second.end()) continue;
-                keys.keys.emplace(it->first.GetID(), it->second);
+            // Let the descriptor look up its own non-extended keys, so that a key in an
+            // x-only expression is found whatever the parity of its Y coordinate.
+            FlatSigningProvider known_keys;
+            for (const auto& [pub, key] : wallet_keys.second) {
+                known_keys.keys.emplace(pub.GetID(), key);
             }
+            FlatSigningProvider desc_keys;
+            parsed_desc->ExpandPrivate(/*pos=*/0, known_keys, desc_keys);
+            keys.Merge(std::move(desc_keys));
         }
 
         // ExpandPrivate to whether the descriptor can be derived at the first index.
