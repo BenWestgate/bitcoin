@@ -92,7 +92,7 @@ $ bitcoin-cli -rpcwallet="wallet-01" backupwallet /home/node01/Backups/backup-01
 
 In the GUI, the wallet is selected in the `Wallet` drop-down list in the upper right corner. If this list is not present, the wallet can be loaded in `File` ->`Open Wallet` if necessary. Then, the backup can be done in `File` -> `Backup Wallet…`.
 
-This backup file can be stored on one or multiple offline devices, which must be reliable enough to work in an emergency and be malware free. Backup files can be regularly tested to avoid problems in the future.
+This backup file can be stored on one or multiple offline devices, which must be reliable enough to work in an emergency and be malware free. Backup files can be regularly tested to avoid problems in the future, as described in [Testing a Backup](#17-testing-a-backup).
 
 If the computer has malware, it can compromise the wallet when recovering the backup file. One way to minimize this is to not connect the backup to an online device.
 
@@ -123,6 +123,22 @@ $ bitcoin-cli -rpcwallet="restored-wallet" getwalletinfo
 ```
 
 The restored wallet can also be loaded in the GUI via `File` ->`Open wallet`.
+
+On a pruned node, restoring a wallet needs every block from the point where the backup was last synchronized, or from the wallet's birth time (the earliest timestamp of its descriptors) if that is later. If the node has already pruned those blocks, `restorewallet` fails with `Prune: last wallet synchronisation goes beyond pruned data`. Restore the backup on a node that still has those blocks, such as an unpruned node, or reindex as the error message says, which downloads the whole block chain again.
+
+### 1.7 Testing a Backup
+
+A backup can be tested by restoring it under another name and comparing its descriptors with those of the original wallet.
+
+```
+$ bitcoin-cli restorewallet "backup-test" /home/node01/Backups/backup-01.dat
+$ bitcoin-cli -rpcwallet="wallet-01" listdescriptors > original.json
+$ bitcoin-cli -rpcwallet="backup-test" listdescriptors > restored.json
+$ diff <(jq -S '.descriptors | map(.desc)' original.json) <(jq -S '.descriptors | map(.desc)' restored.json)
+$ bitcoin-cli unloadwallet "backup-test"
+```
+
+`diff` prints nothing when the backup has the same descriptors as the wallet. This does not reveal private keys, and works while the wallet is locked. The restored copy stays in the wallet directory after it is unloaded, and its folder (`backup-test`) can be deleted.
 
 ## Wallet Passphrase
 
