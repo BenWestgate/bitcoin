@@ -109,6 +109,8 @@ After that, `listdescriptors` can be used to check if the wallet was created suc
 
 The `<0;1>` notation in `desc` caused the creation of two descriptors. One uses the chain 0 for external addresses, and the other uses chain 1 for internal ones (change).
 
+Each participant should back up the multisig descriptor together with their own key. Spending needs the descriptor, which lists every participant's xpub with its key origin and the number of signatures required. A backup of one participant's HD key alone, for example written on paper, cannot rebuild the multisig wallet. To restore a participant, create a blank wallet, add the backed-up key with `addhdkey`, and import the descriptor into it as above.
+
 Once the wallets have already been created and this tutorial needs to be repeated or resumed, it is not necessary to recreate them, just load them with the command below:
 
 ```bash
