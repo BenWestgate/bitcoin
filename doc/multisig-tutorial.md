@@ -173,7 +173,7 @@ The `send` RPC can also return a PSBT if more signatures are needed to sign the 
 
 ### 1.6 Decode or Analyze the PSBT
 
-Optionally, the PSBT can be decoded to a JSON format using `decodepsbt` RPC.
+The PSBT can be decoded to a JSON format using `decodepsbt` RPC.
 
 The `analyzepsbt` RPC analyzes and provides information about the current status of a PSBT and its inputs, e.g. missing signatures.
 
@@ -181,6 +181,12 @@ The `analyzepsbt` RPC analyzes and provides information about the current status
 ./build/bin/bitcoin rpc -signet decodepsbt $funded_psbt
 
 ./build/bin/bitcoin rpc -signet analyzepsbt $funded_psbt
+```
+
+Before signing, each participant should check the decoded PSBT: every destination address and amount is the intended one, every other output belongs to the multisig (`getaddressinfo` in the participant's own wallet reports `"ismine": true`), and the fee is reasonable. The command below lists the fee and each output's address and amount, and works for both PSBT versions.
+
+```bash
+./build/bin/bitcoin rpc -signet decodepsbt $funded_psbt | jq '{fee, outputs: [(.tx.vout // .outputs)[] | {address: (.scriptPubKey // .script).address, amount: (.value // .amount)}]}'
 ```
 
 ### 1.7 Update the PSBT
