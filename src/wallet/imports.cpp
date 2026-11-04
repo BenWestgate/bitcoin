@@ -121,13 +121,44 @@ ImportResult ImportDescriptor(CWallet& wallet, const ImportDescriptorRequest& re
         );
     }
 
+    std::pair<std::map<CExtPubKey, CExtKey>, std::map<CPubKey, CKey>> wallet_keys = wallet.GetKnownKeys();
     for (size_t j = 0; j < parsed_descs.size(); ++j) {
-        auto parsed_desc = std::move(parsed_descs[j]);
+        std::shared_ptr<Descriptor> parsed_desc = std::move(parsed_descs[j]);
         if (parsed_descs.size() == 2) {
             desc_internal = j == 1;
         } else if (parsed_descs.size() > 2) {
             CHECK_NONFATAL(!desc_internal);
         }
+
+        // Substitute any xpubs with xprvs if known to the wallet, unless the wallet already has this descriptor.
+        // Substituting changes the descriptor string, so the import would add a copy instead of updating the existing one.
+        if (!wallet.GetDescriptorScriptPubKeyMan(WalletDescriptor(parsed_desc, 0, 0, 0, 0))) {
+            parsed_desc->SubstituteMasterExtPubs(wallet_keys.first);
+        }
+
+        // Insert into keys any private keys that the wallet already knows
+        // This needs to be done after xpubs have been substituted
+        // Only do this for the first descriptor in the multipath expansion as all substitutions will be for the same key
+        if (j == 0) {
+            std::set<CExtPubKey> desc_xpubs;
+            std::set<CPubKey> desc_pubs;
+            parsed_desc->GetPubKeys(desc_pubs, desc_xpubs);
+            for (const CExtPubKey& xpub : desc_xpubs) {
+                const auto& it = wallet_keys.first.find(xpub);
+                if (it == wallet_keys.first.end()) continue;
+                keys.keys.emplace(it->first.pubkey.GetID(), it->second.key);
+            }
+            // Let the descriptor look up its own non-extended keys, so that a key in an
+            // x-only expression is found whatever the parity of its Y coordinate.
+            FlatSigningProvider known_keys;
+            for (const auto& [pub, key] : wallet_keys.second) {
+                known_keys.keys.emplace(pub.GetID(), key);
+            }
+            FlatSigningProvider desc_keys;
+            parsed_desc->ExpandPrivate(/*pos=*/0, known_keys, desc_keys);
+            keys.Merge(std::move(desc_keys));
+        }
+
         // ExpandPrivate to whether the descriptor can be derived at the first index.
         FlatSigningProvider expand_keys;
         std::vector<CScript> scripts;
