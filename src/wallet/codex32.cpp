@@ -6,12 +6,14 @@
 #include <wallet/codex32.h>
 
 #include <bech32.h>
+#include <support/cleanse.h>
 #include <util/strencodings.h>
 
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -201,10 +203,11 @@ Residue PolyMod(const data& v, const Residue& gen)
 
 /** Verify a checksum. */
 template <typename Residue>
-bool VerifyChecksum(const std::string& hrp, const data& values, const Residue& gen, const Residue& target)
+bool VerifyChecksum(const std::string& hrp, std::span<const uint8_t> values, const Residue& gen, const Residue& target)
 {
     auto enc = bech32::internal::PreparePolynomialCoefficients(hrp, values, 0);
     auto res = PolyMod(enc, gen);
+    memory_cleanse(enc.data(), enc.size());
     for (size_t i = 0; i < res.size(); ++i) {
         if (res[i] != target[i]) {
             return 0;
@@ -215,11 +218,12 @@ bool VerifyChecksum(const std::string& hrp, const data& values, const Residue& g
 
 /** Create a checksum. */
 template <typename Residue>
-data CreateChecksum(const std::string& hrp, const data& values, const Residue& gen, const Residue& target)
+data CreateChecksum(const std::string& hrp, std::span<const uint8_t> values, const Residue& gen, const Residue& target)
 {
     auto enc = bech32::internal::PreparePolynomialCoefficients(hrp, values, gen.size());
     enc.insert(enc.end(), gen.size(), 0x00);
     const auto checksum = PolyMod(enc, gen);
+    memory_cleanse(enc.data(), enc.size());
     data ret(gen.size());
     for (size_t i = 0; i < checksum.size(); ++i) {
         ret[i] = checksum[i] ^ target[i];
@@ -284,12 +288,15 @@ Result::Result(const std::string& str) {
 
     const size_t max_length = VALID_LENGTHS.back();
     auto res = bech32::internal::Decode(str, max_length, 6);
+    // Move the data part into secure memory straight away and wipe the original.
+    const SecureData values(res.second.begin(), res.second.end());
+    memory_cleanse(res.second.data(), res.second.size());
 
     if (str.size() > max_length) {
         m_valid = INVALID_LENGTH;
         // Early return since if we failed the max size check, Decode did not give us any data.
         return;
-    } else if (res.first.empty() && res.second.empty()) {
+    } else if (res.first.empty() && values.empty()) {
         m_valid = BECH32_DECODE;
         return;
     } else if (res.first != "ms") {
@@ -304,16 +311,16 @@ Result::Result(const std::string& str) {
     }
     m_hrp = std::move(res.first);
 
-    const size_t expanded_length = ExpandedLength(m_hrp, res.second.size());
+    const size_t expanded_length = ExpandedLength(m_hrp, values.size());
     if (expanded_length <= MAX_REGULAR_EXPANDED_LENGTH) {
-        if (VerifyChecksum(m_hrp, res.second, CODEX32_GEN, CODEX32_M)) {
-            m_data = data(res.second.begin(), res.second.end() - CODEX32_GEN.size());
+        if (VerifyChecksum(m_hrp, values, CODEX32_GEN, CODEX32_M)) {
+            m_data.assign(values.begin(), values.end() - CODEX32_GEN.size());
         } else {
             m_valid = BAD_CHECKSUM;
         }
     } else if (expanded_length >= MIN_LONG_EXPANDED_LENGTH && expanded_length <= MAX_LONG_EXPANDED_LENGTH) {
-        if (VerifyChecksum(m_hrp, res.second, CODEX32_LONG_GEN, CODEX32_LONG_M)) {
-            m_data = data(res.second.begin(), res.second.end() - CODEX32_LONG_GEN.size());
+        if (VerifyChecksum(m_hrp, values, CODEX32_LONG_GEN, CODEX32_LONG_M)) {
+            m_data.assign(values.begin(), values.end() - CODEX32_LONG_GEN.size());
         } else {
             m_valid = BAD_CHECKSUM;
         }
@@ -322,7 +329,7 @@ Result::Result(const std::string& str) {
     }
 
     if (m_valid == OK) {
-        auto k = bech32::internal::CHARSET[res.second[0]];
+        auto k = bech32::internal::CHARSET[values[0]];
         if (k < '0' || k == '1' || k > '9') {
             m_valid = INVALID_K;
         }
@@ -333,7 +340,7 @@ Result::Result(const std::string& str) {
     }
 }
 
-Result::Result(std::string&& hrp, size_t k, const std::string& id, char share_idx, const std::vector<unsigned char>& data) {
+Result::Result(std::string&& hrp, size_t k, const std::string& id, char share_idx, std::span<const unsigned char> data) {
     m_valid = OK;
     if (hrp != "ms") {
         m_valid = INVALID_HRP;

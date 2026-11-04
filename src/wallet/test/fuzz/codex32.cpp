@@ -7,6 +7,7 @@
 #include <util/strencodings.h>
 #include <wallet/codex32.h>
 
+#include <algorithm>
 #include <cassert>
 #include <string>
 #include <vector>
@@ -41,7 +42,7 @@ FUZZ_TARGET(codex32)
                 assert(dec.GetK() == k);
                 assert(dec.GetIdString() == ToLower(id));
                 assert(dec.GetShareIndex() == ToLower(share_idx));
-                assert(dec.GetPayload() == payload);
+                assert(std::ranges::equal(dec.GetPayload(), payload));
                 valid.push_back(std::move(res));
             }
         }

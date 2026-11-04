@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -71,10 +72,10 @@ extern const char* CHARSET;
 extern const int8_t CHARSET_REV[128];
 
 /** Expand a HRP for use in checksum computation. */
-std::vector<unsigned char> PreparePolynomialCoefficients(const std::string& hrp, const data& values, size_t extra);
+std::vector<unsigned char> PreparePolynomialCoefficients(const std::string& hrp, std::span<const uint8_t> values, size_t extra);
 
 /** Encode a hrpstring without concerning ourselves with checksum validity */
-std::string Encode(const std::string& hrp, const data& values, const data& checksum);
+std::string Encode(const std::string& hrp, std::span<const uint8_t> values, const data& checksum);
 
 /** Decode a hrpstring without concerning ourselves with checksum validity */
 std::pair<std::string, data> Decode(const std::string& str, size_t max_length, size_t checksum_length);

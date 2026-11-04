@@ -4,11 +4,14 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <bech32.h>
+#include <support/cleanse.h>
 #include <util/vector.h>
 
 #include <array>
 #include <cassert>
 #include <optional>
+#include <span>
+#include <utility>
 
 namespace bech32
 {
@@ -340,7 +343,7 @@ const int8_t CHARSET_REV[128] = {
      1,  0,  3, 16, 11, 28, 12, 14,  6,  4,  2, -1, -1, -1, -1, -1
 };
 
-std::vector<unsigned char> PreparePolynomialCoefficients(const std::string& hrp, const data& values, size_t extra)
+std::vector<unsigned char> PreparePolynomialCoefficients(const std::string& hrp, std::span<const uint8_t> values, size_t extra)
 {
     data ret;
     ret.reserve(hrp.size() + 1 + hrp.size() + values.size() + extra);
@@ -356,7 +359,7 @@ std::vector<unsigned char> PreparePolynomialCoefficients(const std::string& hrp,
 }
 
 /** Encode a hrpstring without concerning ourselves with checksum validity */
-std::string Encode(const std::string& hrp, const data& values, const data& checksum) {
+std::string Encode(const std::string& hrp, std::span<const uint8_t> values, const data& checksum) {
     // First ensure that the HRP is all lowercase. BIP-173 and BIP350 require an encoder
     // to return a lowercase Bech32/Bech32m string, but if given an uppercase HRP, the
     // result will always be invalid.
@@ -386,6 +389,8 @@ std::pair<std::string, data> Decode(const std::string& str, size_t limit, size_t
         int8_t rev = CHARSET_REV[c];
 
         if (rev == -1) {
+            // The data part may be secret (as in codex32), so wipe what was decoded so far.
+            memory_cleanse(values.data(), values.size());
             return {};
         }
         values[i] = rev;
@@ -395,7 +400,8 @@ std::pair<std::string, data> Decode(const std::string& str, size_t limit, size_t
     for (size_t i = 0; i < pos; ++i) {
         hrp += LowerCase(str[i]);
     }
-    return std::make_pair(hrp, values);
+    // Move rather than copy, so that no unwiped copy of the data part is left behind.
+    return std::make_pair(std::move(hrp), std::move(values));
 }
 
 } // namespace internal

@@ -873,7 +873,7 @@ static CExtKey ExtKeyFromCodex32(const UniValue& strings)
         }
     }
 
-    const std::vector<unsigned char> seed{secret->GetPayload()};
+    const codex32::SecureData seed{secret->GetPayload()};
     CExtKey master;
     master.SetSeed(std::as_bytes(std::span{seed}));
     return master;

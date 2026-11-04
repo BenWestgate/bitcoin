@@ -13,16 +13,21 @@
 #define BITCOIN_WALLET_CODEX32_H
 
 #include <bech32.h>
+#include <support/allocators/secure.h>
 #include <util/strencodings.h>
 
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
 namespace codex32
 {
+
+/** Secret data (gf32 symbols or seed bytes), wiped from memory when it is freed. */
+using SecureData = std::vector<uint8_t, secure_allocator<uint8_t>>;
 
 enum Error {
     OK,
@@ -55,7 +60,7 @@ public:
      * This constructor requires the hrp to be the lowercase string "ms" and the
      * payload to be 16, 20, 24, 28, 32 or 64 bytes, but will ignore the case of
      * `id` and `share_idx`. */
-    Result(std::string&& hrp, size_t k, const std::string& id, char share_idx, const std::vector<unsigned char>& data);
+    Result(std::string&& hrp, size_t k, const std::string& id, char share_idx, std::span<const unsigned char> data);
 
     /** Construct a codex32 result by interpolating a set of input shares to obtain an output share
      *
@@ -94,10 +99,10 @@ public:
     }
 
     /** Accessor for the binary payload data (in base 256, not gf32) */
-    std::vector<unsigned char> GetPayload() const {
+    SecureData GetPayload() const {
         assert(IsValid());
 
-        std::vector<unsigned char> ret;
+        SecureData ret;
         ret.reserve(((m_data.size() - 6) * 5) / 8);
         // Note that `ConvertBits` returns a bool indicating whether or not nonzero bits
         // were discarded. In BIP 93, we discard bits regardless of whether they are 0,
@@ -106,14 +111,17 @@ public:
         return ret;
     };
 
-    /** (Re-)encode the codex32 data as a hrp string */
+    /** (Re-)encode the codex32 data as a hrp string
+     *
+     * The result holds the secret data in ordinary memory, so callers handling a
+     * real secret or share should not keep it longer than needed. */
     std::string Encode() const;
 
 private:
     Error m_valid;               //!< codex32::OK if the string was decoded correctly
 
     std::string m_hrp;           //!< The human readable part
-    std::vector<uint8_t> m_data; //!< The payload (remaining data, excluding checksum)
+    SecureData m_data;           //!< The payload (remaining data, excluding checksum)
 };
 
 } // namespace codex32
