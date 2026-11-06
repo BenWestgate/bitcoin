@@ -11,6 +11,7 @@
 #include <consensus/validation.h>
 #include <key_io.h>
 #include <node/block_template_manager.h>
+#include <node/block_validation_state_catcher.h>
 #include <node/context.h>
 #include <node/miner.h>
 #include <pow.h>
@@ -51,14 +52,16 @@ std::vector<std::shared_ptr<CBlock>> CreateBlockChain(size_t total_height, const
 
         CMutableTransaction coinbase_tx;
         coinbase_tx.nLockTime = static_cast<uint32_t>(height);
-        coinbase_tx.vin.resize(1);
-        coinbase_tx.vin[0].prevout.SetNull();
-        coinbase_tx.vin[0].nSequence = CTxIn::MAX_SEQUENCE_NONFINAL; // Make sure timelock is enforced.
-        coinbase_tx.vout.resize(1);
-        coinbase_tx.vout[0].scriptPubKey = P2WSH_OP_TRUE;
-        coinbase_tx.vout[0].nValue = GetBlockSubsidy(height + 1, params.GetConsensus());
-        // Always include OP_0 as a dummy extraNonce.
-        coinbase_tx.vin[0].scriptSig = CScript() << (height + 1) << OP_0;
+        coinbase_tx.vin = {
+            CTxIn{
+                COutPoint{},
+                CScript{} << (height + 1) << OP_0, // Always include OP_0 as a dummy extraNonce.
+                CTxIn::MAX_SEQUENCE_NONFINAL,      // Make sure timelock is enforced.
+            },
+        };
+        coinbase_tx.vout = {
+            CTxOut{GetBlockSubsidy(height + 1, params.GetConsensus()), P2WSH_OP_TRUE},
+        };
         block.vtx = {MakeTransactionRef(std::move(coinbase_tx))};
 
         block.nVersion = VERSIONBITS_LAST_OLD_BLOCK_VERSION;
@@ -125,22 +128,6 @@ COutPoint MineBlock(const NodeContext& node, const node::BlockCreateOptions& ass
     return valid;
 }
 
-struct BlockValidationStateCatcher : public CValidationInterface {
-    const uint256 m_hash;
-    std::optional<BlockValidationState> m_state;
-
-    BlockValidationStateCatcher(const uint256& hash)
-        : m_hash{hash},
-          m_state{} {}
-
-protected:
-    void BlockChecked(const std::shared_ptr<const CBlock>& block, const BlockValidationState& state) override
-    {
-        if (block->GetHash() != m_hash) return;
-        m_state = state;
-    }
-};
-
 COutPoint MineBlock(const NodeContext& node, std::shared_ptr<CBlock>& block)
 {
     while (!CheckProofOfWork(block->GetHash(), block->nBits, Params().GetConsensus())) {
@@ -156,7 +143,7 @@ COutPoint ProcessBlock(const NodeContext& node, const std::shared_ptr<CBlock>& b
     auto& chainman{*Assert(node.chainman)};
     const auto old_height = WITH_LOCK(chainman.GetMutex(), return chainman.ActiveHeight());
     bool new_block;
-    BlockValidationStateCatcher bvsc{block->GetHash()};
+    node::BlockValidationStateCatcher bvsc{block->GetHash()};
     node.validation_signals->RegisterValidationInterface(&bvsc);
     const bool processed{chainman.ProcessNewBlock(block, true, true, &new_block)};
     const bool duplicate{!new_block && processed};

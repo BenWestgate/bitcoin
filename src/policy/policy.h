@@ -82,12 +82,6 @@ inline constexpr bool DEFAULT_ACCEPT_DATACARRIER = true;
  * Default setting for -datacarriersize in vbytes.
  */
 inline constexpr unsigned int MAX_OP_RETURN_RELAY = MAX_STANDARD_TX_WEIGHT / WITNESS_SCALE_FACTOR;
-/**
- * An extra transaction can be added to a package, as long as it only has one
- * ancestor and is no larger than this. Not really any reason to make this
- * configurable as it doesn't materially change DoS parameters.
- */
-inline constexpr unsigned int EXTRA_DESCENDANT_TX_SIZE_LIMIT{10'000};
 
 /**
  * Maximum number of ephemeral dust outputs allowed.
@@ -180,16 +174,10 @@ bool SpendsNonAnchorWitnessProg(const CTransaction& tx, const CCoinsViewCache& p
 /** Compute the virtual transaction size (weight reinterpreted as bytes). */
 int64_t GetVirtualTransactionSize(int64_t nWeight, int64_t nSigOpCost, unsigned int bytes_per_sigop);
 int64_t GetVirtualTransactionSize(const CTransaction& tx, int64_t nSigOpCost, unsigned int bytes_per_sigop);
-int64_t GetVirtualTransactionInputSize(const CTxIn& tx, int64_t nSigOpCost, unsigned int bytes_per_sigop);
 
 static inline int64_t GetVirtualTransactionSize(const CTransaction& tx)
 {
     return GetVirtualTransactionSize(tx, 0, 0);
-}
-
-static inline int64_t GetVirtualTransactionInputSize(const CTxIn& tx)
-{
-    return GetVirtualTransactionInputSize(tx, 0, 0);
 }
 
 int64_t GetSigOpsAdjustedWeight(int64_t weight, int64_t sigop_cost, unsigned int bytes_per_sigop);

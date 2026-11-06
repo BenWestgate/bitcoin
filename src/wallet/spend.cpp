@@ -31,6 +31,7 @@
 #include <wallet/wallet.h>
 
 #include <cmath>
+#include <vector>
 
 using common::StringForFeeReason;
 using common::TransactionErrorString;
@@ -213,7 +214,7 @@ std::vector<COutput> CoinsResult::All() const
 void CoinsResult::Erase(const std::unordered_set<COutPoint, SaltedOutpointHasher>& coins_to_remove)
 {
     for (auto& [type, vec] : coins) {
-        auto remove_it = std::remove_if(vec.begin(), vec.end(), [&](const COutput& coin) {
+        std::erase_if(vec, [&](const COutput& coin) {
             // remove it if it's on the set
             if (!coins_to_remove.contains(coin.outpoint)) return false;
 
@@ -222,7 +223,6 @@ void CoinsResult::Erase(const std::unordered_set<COutPoint, SaltedOutpointHasher
             if (coin.HasEffectiveValue() && total_effective_amount.has_value()) total_effective_amount = *total_effective_amount - coin.GetEffectiveValue();
             return true;
         });
-        vec.erase(remove_it, vec.end());
     }
 }
 
@@ -1439,8 +1439,8 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
     // accidental reuse.
     reservedest.KeepDestination();
 
-    wallet.WalletLogPrintf("Coin Selection: Algorithm:%s, Waste Metric Score:%d\n", GetAlgorithmName(result.GetAlgo()), result.GetWaste());
-    wallet.WalletLogPrintf("Fee Calculation: Fee:%d Bytes:%u, Source: %s\n",
+    wallet.WalletLogPrintf("Coin Selection: Algorithm:%s, Waste Metric Score:%d", GetAlgorithmName(result.GetAlgo()), result.GetWaste());
+    wallet.WalletLogPrintf("Fee Calculation: Fee:%d Bytes:%u, Source: %s",
                            current_fee, nBytes, StringForFeeReason(min_fee_rate.fee_reason));
     return CreatedTransactionResult(tx, current_fee, change_pos, min_fee_rate.fee_reason);
 }
@@ -1491,7 +1491,7 @@ util::Result<CreatedTransactionResult> CreateTransaction(
                txr_grouped.has_value() ? txr_grouped->fee : 0,
                txr_grouped.has_value() && txr_grouped->change_pos.has_value() ? int32_t(*txr_grouped->change_pos) : -1);
         if (txr_grouped) {
-            wallet.WalletLogPrintf("Fee non-grouped = %lld, grouped = %lld, using %s\n",
+            wallet.WalletLogPrintf("Fee non-grouped = %lld, grouped = %lld, using %s",
                 txr_ungrouped.fee, txr_grouped->fee, use_aps ? "grouped" : "non-grouped");
             if (use_aps) return txr_grouped;
         }

@@ -44,7 +44,6 @@ WalletController::WalletController(ClientModel& client_model, const PlatformStyl
     , m_client_model(client_model)
     , m_node(client_model.node())
     , m_platform_style(platform_style)
-    , m_options_model(client_model.getOptionsModel())
 {
     m_handler_load_wallet = m_node.walletLoader().handleLoadWallet([this](std::unique_ptr<interfaces::Wallet> wallet) {
         getOrCreateWallet(std::move(wallet));
@@ -180,7 +179,7 @@ void WalletController::removeAndDeleteWallet(WalletModel* wallet_model)
     // Unregister wallet model.
     {
         QMutexLocker locker(&m_mutex);
-        m_wallets.erase(std::remove(m_wallets.begin(), m_wallets.end(), wallet_model));
+        std::erase(m_wallets, wallet_model);
     }
     Q_EMIT walletRemoved(wallet_model);
     // Currently this can trigger the unload since the model can hold the last

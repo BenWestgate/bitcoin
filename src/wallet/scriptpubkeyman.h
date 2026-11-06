@@ -147,7 +147,7 @@ public:
 
     /** Prepends the wallet name in logging output to ease debugging in multi-wallet use cases */
     template <typename... Params>
-    void WalletLogPrintf(util::ConstevalFormatString<sizeof...(Params)> wallet_fmt, const Params&... params) const
+    void WalletLogPrintf(util::log::FormatString<sizeof...(Params)> wallet_fmt, const Params&... params) const
     {
         LogInfo("[%s] %s", m_storage.LogName(), tfm::format(wallet_fmt, params...));
     };
@@ -232,7 +232,7 @@ public:
     //! Adds an encrypted key to the store, without saving it to disk (used by LoadWallet)
     bool LoadCryptedKey(const CPubKey &vchPubKey, const std::vector<unsigned char> &vchCryptedSecret, bool checksum_valid);
     //! Adds a CScript to the store
-    bool LoadCScript(const CScript& redeemScript);
+    [[nodiscard]] bool LoadCScript(const CScript& redeemScript);
     //! Load a HD chain model (used by LoadWallet)
     void LoadHDChain(const CHDChain& chain);
     void AddInactiveHDChain(const CHDChain& chain);
@@ -343,7 +343,7 @@ public:
     static std::unique_ptr<DescriptorScriptPubKeyMan> LoadFromStorage(WalletStorage& storage, const uint256& id, WalletDescriptor& descriptor, int64_t keypool_size, const KeyMap& keys, const CryptedKeyMap& ckeys);
     static std::unique_ptr<DescriptorScriptPubKeyMan> CreateFromImport(WalletStorage& storage, WalletDescriptor& descriptor, int64_t keypool_size, const FlatSigningProvider& provider);
     static std::unique_ptr<DescriptorScriptPubKeyMan> CreateFromMigration(WalletStorage& storage, WalletBatch& batch, WalletDescriptor& descriptor, int64_t keypool_size, const FlatSigningProvider& provider);
-    static std::unique_ptr<DescriptorScriptPubKeyMan> GenerateNewSingleSig(WalletStorage& storage, WalletBatch& batch, int64_t keypool_size, const CExtKey& master_key, OutputType addr_type, bool internal);
+    static std::unique_ptr<DescriptorScriptPubKeyMan> GenerateNewSingleSig(WalletStorage& storage, WalletBatch& batch, int64_t keypool_size, const CExtKey& master_key, OutputType addr_type, bool internal, std::optional<int64_t> timestamp = std::nullopt);
 
     mutable RecursiveMutex cs_desc_man;
 

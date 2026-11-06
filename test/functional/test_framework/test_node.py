@@ -149,6 +149,8 @@ class TestNode():
             "-debugexclude=rand",
             "-uacomment=testnode%d" % i,  # required for subversion uniqueness across peers
         ]
+        if use_gui:
+            self.args.append("-lang=nl_NL")  # Set language to try to trigger translation bugs
         if uses_wallet is not None and not uses_wallet:
             self.args.append("-disablewallet")
 
@@ -299,7 +301,7 @@ class TestNode():
                 # on stderr, which the test framework treats as a failure.
                 # Fall back to Qt's poll-based event dispatcher instead.
                 subp_env.setdefault("QT_NO_GLIB", "1")
-            subp_env.setdefault("LC_ALL", "nl_NL.UTF-8") # Set language to try to trigger translation bugs
+            subp_env.setdefault("LC_ALL", "C.UTF-8")  # Qt prints a warning to stderr if the locale is not UTF-8
             if sys.platform.startswith("linux") and "XDG_RUNTIME_DIR" not in subp_env:
                 # Qt prints warnings to stderr when XDG_RUNTIME_DIR is unset or has wrong
                 # permissions (e.g. in CI environments without a desktop session), which
@@ -351,10 +353,10 @@ class TestNode():
                 *extra_args
             )
 
-    def wait_for_rpc_connection(self, *, wait_for_import=True):
+    def wait_for_rpc_connection(self, *, wait_for_full_init=True):
         """Sets up an RPC connection to the bitcoind process. Returns False if unable to connect."""
-        # Poll at a rate of four times per second
-        poll_per_s = 4
+        # Poll at a rate of twenty times per second
+        poll_per_s = 20
 
         suppressed_errors = collections.defaultdict(int)
         latest_error = None
@@ -362,7 +364,8 @@ class TestNode():
             suppressed_errors[category] += 1
             return (category, repr(e))
 
-        for _ in range(poll_per_s * self.rpc_timeout):
+        stop_time = time.monotonic() + self.rpc_timeout
+        while time.monotonic() <= stop_time:
             if self.process.poll() is not None:
                 # Attach abrupt shutdown error/s to the exception message
                 self.stderr.seek(0)
@@ -375,12 +378,13 @@ class TestNode():
                 rpc = self.create_new_rpc_connection(mode="AUTHPROXY")
                 rpc.getblockcount()
                 # If the call to getblockcount() succeeds then the RPC connection is up
-                if self.version_is_at_least(190000) and wait_for_import:
+                if self.version_is_at_least(190000) and wait_for_full_init:
                     # getmempoolinfo.loaded is available since commit
                     # bb8ae2c (version 0.19.0)
                     self.wait_until(lambda: rpc.getmempoolinfo()['loaded'])
+                    self.wait_for_index_sync(rpc=rpc)
                     # Wait for the node to finish reindex, block import, and
-                    # loading the mempool. Usually importing happens fast or
+                    # loading the mempool and indexes. Usually importing happens fast or
                     # even "immediate" when the node is started. However, there
                     # is no guarantee and sometimes ImportBlocks might finish
                     # later. This is going to cause intermittent test failures,
@@ -588,6 +592,8 @@ class TestNode():
 
     @property
     def chain_dir(self) -> str:
+        if self.chain == "main":
+            return ""
         if self.chain != "signet":
             return self.chain
         for arg in self.extra_args:
@@ -633,7 +639,7 @@ class TestNode():
         assert_equal(type(unexpected_msgs), list)
         remaining_expected = list(expected_msgs)
 
-        time_end = time.time() + timeout * self.timeout_factor
+        time_end = time.monotonic() + timeout * self.timeout_factor
         prev_size = self.debug_log_size(encoding="utf-8")  # Must use same encoding that is used to read() below
 
         def join_log(log):
@@ -653,7 +659,7 @@ class TestNode():
                 remaining_expected.pop()
             if not remaining_expected:
                 return
-            if time.time() >= time_end:
+            if time.monotonic() >= time_end:
                 break
             time.sleep(0.05)
         remaining_expected = [e for e in remaining_expected if e not in log]
@@ -665,7 +671,7 @@ class TestNode():
         """
         Block until we see a particular debug log message fragment or until we exceed the timeout.
         """
-        time_end = time.time() + timeout * self.timeout_factor
+        time_end = time.monotonic() + timeout * self.timeout_factor
         prev_size = self.debug_log_size(mode="rb")  # Must use same mode that is used to read() below
         remaining_expected = list(expected_msgs)
 
@@ -681,7 +687,7 @@ class TestNode():
             if not remaining_expected:
                 return
 
-            if time.time() >= time_end:
+            if time.monotonic() >= time_end:
                 print_log = " - " + "\n - ".join(log.decode("utf8", errors="replace").splitlines())
                 break
 
@@ -907,8 +913,22 @@ class TestNode():
         self.mocktime += seconds
         self.setmocktime(self.mocktime)
 
-    def wait_until(self, test_function, timeout=60, check_interval=0.05):
+    def wait_until(self, test_function, *, timeout=60, check_interval=0.05):
         return wait_until_helper_internal(test_function, timeout=timeout, timeout_factor=self.timeout_factor, check_interval=check_interval)
+
+    def wait_for_index_sync(self, *, rpc=None, **kwargs):
+        """Wait for every enabled index to reach this node's chain tip."""
+        if not self.version_is_at_least(210000):
+            return  # getindexinfo is not available in earlier versions
+
+        rpc = rpc or self
+
+        def indexes_are_synced():
+            indexes = rpc.getindexinfo().values()
+            height = rpc.getblockcount()
+            return all(index["synced"] and index["best_block_height"] == height for index in indexes)
+
+        self.wait_until(indexes_are_synced, **kwargs)
 
 class TestNodeCLIAttr:
     def __init__(self, cli, command):

@@ -8,10 +8,8 @@ from itertools import product
 
 from test_framework.blocktools import COINBASE_MATURITY
 from test_framework.descriptors import descsum_create
-from test_framework.messages import (
-    COIN,
-    DEFAULT_ANCESTOR_LIMIT,
-)
+from test_framework.mempool_util import DEFAULT_ANCESTOR_LIMIT
+from test_framework.messages import COIN
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_array_result,
@@ -29,8 +27,7 @@ OUT_OF_RANGE = "Amount out of range"
 class WalletTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 4
-        # whitelist peers to speed up tx relay / mempool sync
-        self.noban_tx_relay = True
+        self.noban_tx_relay = True  # faster tx relay
         self.extra_args = [[
             "-dustrelayfee=0", "-walletrejectlongchains=0"
         ]] * self.num_nodes
@@ -186,7 +183,7 @@ class WalletTest(BitcoinTestFramework):
         unspent_0 = self.nodes[1].listunspent()[0]
         self.nodes[1].lockunspent(False, [unspent_0])
         tx = self.nodes[1].createrawtransaction([unspent_0], { self.nodes[1].getnewaddress() : 1 })
-        self.nodes[1].fundrawtransaction(tx,{"lockUnspents": True})
+        self.nodes[1].fundrawtransaction(tx, lock_unspents=True)
 
         # fundrawtransaction can lock an input
         self.nodes[1].lockunspent(True, [unspent_0])
@@ -590,6 +587,11 @@ class WalletTest(BitcoinTestFramework):
         assert_equal(txid_feeReason_one["fee_reason"], "Fallback fee")
         txid_feeReason_two = self.nodes[2].sendmany(dummy='', amounts={address: 5}, verbose=True)
         assert_equal(txid_feeReason_two["fee_reason"], "Fallback fee")
+        self.log.info("Test send* RPCs with an explicit fee_rate")
+        txid_feeReason_specified = self.nodes[2].sendtoaddress(address=address, amount=1, fee_rate=5, verbose=True)
+        assert_equal(txid_feeReason_specified["fee_reason"], "User Specified Fee")
+        txid_feeReason_specified_many = self.nodes[2].sendmany(dummy='', amounts={address: 1}, fee_rate=5, verbose=True)
+        assert_equal(txid_feeReason_specified_many["fee_reason"], "User Specified Fee")
         self.log.info("Test send* RPCs with verbose=False")
         txid_feeReason_three = self.nodes[2].sendtoaddress(address=address, amount=5, verbose=False)
         assert_equal(self.nodes[2].gettransaction(txid_feeReason_three)['txid'], txid_feeReason_three)

@@ -169,6 +169,9 @@ class TestBitcoinCli(BitcoinTestFramework):
         assert_equal(['foo', 'bar'], self.nodes[0].cli(f'-rpcuser={user}', '-stdin', '-stdinrpcpass', input=f'{password}\nfoo\nbar').echo())
         assert_raises_process_error(1, 'Incorrect rpcuser or rpcpassword were specified', self.nodes[0].cli(f'-rpcuser={user}', '-stdin', '-stdinrpcpass', input='foo').echo)
 
+        self.log.info("Test -rpcclienttimeout=0 (no timeout)")
+        assert_equal(BLOCKS, self.nodes[0].cli('-rpcclienttimeout=0').getblockcount())
+
         self.log.info("Test connecting to a non-existing server")
         assert_raises_process_error(1, "Could not connect to the server", self.nodes[0].cli('-rpcport=1').echo)
 
@@ -471,11 +474,11 @@ class TestBitcoinCli(BitcoinTestFramework):
         self.nodes[0].wait_for_rpc_connection()
         assert_equal(blocks, BLOCKS + 25)
 
-        self.log.info("Test -rpcwait option waits at most -rpcwaittimeout seconds for startup")
+        self.log.info("Test -rpcwait option waits at least -rpcwaittimeout seconds for startup")
         self.stop_node(0)  # stop the node so we time out
-        start_time = time.time()
-        assert_raises_process_error(1, "Could not connect to the server", self.nodes[0].cli('-rpcwait', '-rpcwaittimeout=5').echo)
-        assert_greater_than_or_equal(time.time(), start_time + 5)
+        start_time = time.monotonic()  # match bitcoin-cli steady_clock so the floor measures real wait
+        assert_raises_process_error(1, "Could not connect to the server", self.nodes[0].cli('-rpcwait', '-rpcwaittimeout=1').echo)
+        assert_greater_than_or_equal(time.monotonic() - start_time, 1)
 
         self.log.info("Test that only one of -addrinfo, -generate, -getinfo, -netinfo may be specified at a time")
         assert_raises_process_error(1, "Only one of -getinfo, -netinfo may be specified", self.nodes[0].cli('-getinfo', '-netinfo').send_cli)

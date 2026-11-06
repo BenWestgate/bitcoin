@@ -39,6 +39,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <vector>
 
 #include <boost/test/unit_test.hpp>
 
@@ -399,19 +400,15 @@ BOOST_AUTO_TEST_CASE(test_Get)
         SetupDummyInputs(keystore, coins, {11*CENT, 50*CENT, 21*CENT, 22*CENT});
 
     CMutableTransaction t1;
-    t1.vin.resize(3);
-    t1.vin[0].prevout.hash = dummyTransactions[0].GetHash();
-    t1.vin[0].prevout.n = 1;
-    t1.vin[0].scriptSig << std::vector<unsigned char>(65, 0);
-    t1.vin[1].prevout.hash = dummyTransactions[1].GetHash();
-    t1.vin[1].prevout.n = 0;
-    t1.vin[1].scriptSig << std::vector<unsigned char>(65, 0) << std::vector<unsigned char>(33, 4);
-    t1.vin[2].prevout.hash = dummyTransactions[1].GetHash();
-    t1.vin[2].prevout.n = 1;
-    t1.vin[2].scriptSig << std::vector<unsigned char>(65, 0) << std::vector<unsigned char>(33, 4);
-    t1.vout.resize(2);
-    t1.vout[0].nValue = 90*CENT;
-    t1.vout[0].scriptPubKey << OP_1;
+    t1.vin = {
+        CTxIn{COutPoint{dummyTransactions[0].GetHash(), 1}, CScript{} << std::vector<unsigned char>(65, 0)},
+        CTxIn{COutPoint{dummyTransactions[1].GetHash(), 0}, CScript{} << std::vector<unsigned char>(65, 0) << std::vector<unsigned char>(33, 4)},
+        CTxIn{COutPoint{dummyTransactions[1].GetHash(), 1}, CScript{} << std::vector<unsigned char>(65, 0) << std::vector<unsigned char>(33, 4)},
+    };
+    t1.vout = {
+        CTxOut{90 * CENT, CScript{} << OP_1},
+        CTxOut{},
+    };
 
     BOOST_CHECK(ValidateInputsStandardness(CTransaction(t1), coins).IsValid());
 }
@@ -1147,14 +1144,16 @@ BOOST_AUTO_TEST_CASE(getlegacysigopcount_inaccurate_test)
 
 BOOST_AUTO_TEST_CASE(checktxinputs_invalid_transactions_test)
 {
-    auto check_invalid{[](CAmount input_value, CAmount output_value, bool coinbase, int spend_height, TxValidationResult expected_result, std::string_view expected_reason) {
+    auto check_invalid{[](const std::vector<CAmount>& input_values, CAmount output_value, bool coinbase, int spend_height, TxValidationResult expected_result, std::string_view expected_reason) {
         CCoinsViewCache inputs{&CoinsViewEmpty::Get()};
-
-        const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
-        inputs.AddCoin(prevout, Coin{{input_value, CScript() << OP_TRUE}, /*nHeightIn=*/1, coinbase}, /*possible_overwrite=*/false);
-
         CMutableTransaction mtx;
-        mtx.vin.emplace_back(prevout);
+        const auto txid{Txid::FromUint256(uint256::ONE)};
+        uint32_t output_index{0};
+        for (const CAmount input_value : input_values) {
+            const COutPoint prevout{txid, output_index++};
+            inputs.AddCoin(prevout, Coin{{input_value, CScript() << OP_TRUE}, /*nHeightIn=*/1, coinbase}, /*possible_overwrite=*/false);
+            mtx.vin.emplace_back(prevout);
+        }
         mtx.vout.emplace_back(output_value, CScript() << OP_TRUE);
 
         TxValidationState state;
@@ -1165,19 +1164,31 @@ BOOST_AUTO_TEST_CASE(checktxinputs_invalid_transactions_test)
         BOOST_CHECK_EQUAL(state.GetRejectReason(), expected_reason);
     }};
 
-    check_invalid(/*input_value=*/MAX_MONEY + 1,
+    check_invalid(/*input_values=*/{MAX_MONEY + 1},
                   /*output_value=*/0,
                   /*coinbase=*/false,
                   /*spend_height=*/2,
                   TxValidationResult::TX_CONSENSUS, /*expected_reason=*/"bad-txns-inputvalues-outofrange");
 
-    check_invalid(/*input_value=*/1 * COIN,
+    check_invalid(/*input_values=*/{MAX_MONEY, 1},
+                  /*output_value=*/1,
+                  /*coinbase=*/false,
+                  /*spend_height=*/2,
+                  TxValidationResult::TX_CONSENSUS, /*expected_reason=*/"bad-txns-inputvalues-outofrange");
+
+    check_invalid(/*input_values=*/{2 * COIN, -1 * COIN},
+                  /*output_value=*/1,
+                  /*coinbase=*/false,
+                  /*spend_height=*/2,
+                  TxValidationResult::TX_CONSENSUS, /*expected_reason=*/"bad-txns-inputvalues-outofrange");
+
+    check_invalid(/*input_values=*/{1 * COIN},
                   /*output_value=*/2 * COIN,
                   /*coinbase=*/false,
                   /*spend_height=*/2,
                   TxValidationResult::TX_CONSENSUS, /*expected_reason=*/"bad-txns-in-belowout");
 
-    check_invalid(/*input_value=*/1 * COIN,
+    check_invalid(/*input_values=*/{1 * COIN},
                   /*output_value=*/0,
                   /*coinbase=*/true,
                   /*spend_height=*/COINBASE_MATURITY,
@@ -1392,6 +1403,32 @@ BOOST_AUTO_TEST_CASE(spends_witness_prog)
         tx_spend.vin[0].scriptSig.clear();
         BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins));
     }
+}
+
+BOOST_AUTO_TEST_CASE(tx_malformed_serialization)
+{
+    // A transaction with one input, one output and a one-element witness.
+    CMutableTransaction mtx;
+    mtx.vin.resize(1);
+    mtx.vin[0].scriptWitness.stack = {{0xaa}};
+    mtx.vout.emplace_back(1, CScript{} << OP_TRUE);
+    DataStream ser;
+    ser << TX_WITH_WITNESS(mtx);
+
+    CMutableTransaction tx;
+    DataStream{std::span{ser}} >> TX_WITH_WITNESS(tx);
+    BOOST_CHECK(CTransaction{tx}.HasWitness());
+
+    // Every strict prefix ends inside some field, such as a CompactSize, an output
+    // script, a witness element or the locktime, and fails to deserialize.
+    for (size_t len{0}; len < ser.size(); ++len) {
+        BOOST_CHECK_EXCEPTION(DataStream{std::span{ser}.first(len)} >> TX_WITH_WITNESS(tx), std::ios_base::failure, HasReason{"end of data"});
+    }
+
+    // A flag other than 1 is unknown, including one without the witness bit.
+    DataStream bad_flag;
+    bad_flag << mtx.version << uint8_t{0x00} << uint8_t{0x02} << mtx.vin << mtx.vout << mtx.vin[0].scriptWitness.stack << mtx.nLockTime;
+    BOOST_CHECK_EXCEPTION(bad_flag >> TX_WITH_WITNESS(tx), std::ios_base::failure, HasReason{"Unknown transaction optional data"});
 }
 
 BOOST_AUTO_TEST_SUITE_END()

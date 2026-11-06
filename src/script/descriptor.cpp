@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <compare>
+#include <array>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -57,11 +58,11 @@ util::Expected<void, std::string> CheckDescriptorRangeBounds(int64_t low, int64_
     if ((high >> 31) != 0) {
         return util::Unexpected<std::string>("End of range is too high");
     }
-    if (high >= low + 1000000) {
-        return util::Unexpected<std::string>("Range is too large");
-    }
     if (low > high) {
         return util::Unexpected<std::string>("Range specified as [begin,end] must not have begin after end");
+    }
+    if (high - low >= 1000000) {
+        return util::Unexpected<std::string>("Range is too large");
     }
     return {};
 }
@@ -153,20 +154,30 @@ std::string DescriptorChecksum(const std::span<const char>& span)
      * As a result, within-group-of-32 errors count as 1 symbol, as do cross-group errors that don't affect
      * the position within the groups.
      */
-    static const std::string INPUT_CHARSET =
+    static constexpr std::string_view INPUT_CHARSET =
         "0123456789()[],'/*abcdefgh@:$%{}"
         "IJKLMNOPQRSTUVWXYZ&+-.;<=>?!^_|~"
         "ijklmnopqrstuvwxyzABCDEFGH`#\"\\ ";
 
+    /** Lookup table mapping each ASCII byte to its position in INPUT_CHARSET, or -1 if not present. */
+    static constexpr std::array<int8_t, 256> INPUT_CHARSET_POS = []() {
+        std::array<int8_t, 256> table;
+        table.fill(-1);
+        for (size_t i = 0; i < INPUT_CHARSET.size(); ++i) {
+            table[static_cast<uint8_t>(INPUT_CHARSET[i])] = i;
+        }
+        return table;
+    }();
+
     /** The character set for the checksum itself (same as bech32). */
-    static const std::string CHECKSUM_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+    static constexpr std::string_view CHECKSUM_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
     uint64_t c = 1;
     int cls = 0;
     int clscount = 0;
     for (auto ch : span) {
-        auto pos = INPUT_CHARSET.find(ch);
-        if (pos == std::string::npos) return "";
+        auto pos = INPUT_CHARSET_POS[static_cast<uint8_t>(ch)];
+        if (pos == -1) return "";
         c = PolyMod(c, pos & 31); // Emit a symbol for the position inside the group, for every character.
         cls = cls * 3 + (pos >> 5); // Accumulate the group numbers
         if (++clscount == 3) {
@@ -760,10 +771,10 @@ public:
         std::string out = "musig(";
         for (size_t i = 0; i < m_participants.size(); ++i) {
             const auto& pubkey = m_participants.at(i);
-            if (i) out += ",";
+            if (i) out += ',';
             out += pubkey->ToString(type);
         }
-        out += ")";
+        out += ')';
         out += FormatHDKeypath(m_path);
         if (IsRangedDerivation()) {
             out += "/*";
@@ -776,14 +787,14 @@ public:
         out = "musig(";
         for (size_t i = 0; i < m_participants.size(); ++i) {
             const auto& pubkey = m_participants.at(i);
-            if (i) out += ",";
+            if (i) out += ',';
             std::string tmp;
             if (pubkey->ToPrivateString(arg, tmp)) {
                 any_privkeys = true;
             }
             out += tmp;
         }
-        out += ")";
+        out += ')';
         out += FormatHDKeypath(m_path);
         if (IsRangedDerivation()) {
             out += "/*";
@@ -795,14 +806,14 @@ public:
         out = "musig(";
         for (size_t i = 0; i < m_participants.size(); ++i) {
             const auto& pubkey = m_participants.at(i);
-            if (i) out += ",";
+            if (i) out += ',';
             std::string tmp;
             if (!pubkey->ToNormalizedString(arg, tmp, cache)) {
                 return false;
             }
             out += tmp;
         }
-        out += ")";
+        out += ')';
         out += FormatHDKeypath(m_path);
         if (IsRangedDerivation()) {
             out += "/*";
@@ -960,7 +971,7 @@ public:
         // Initialize to true for non-private types.
         bool any_success{!is_private};
         for (const auto& scriptarg : m_subdescriptor_args) {
-            if (pos++) ret += ",";
+            if (pos++) ret += ',';
             std::string tmp;
             bool subscript_res{scriptarg->ToStringHelper(arg, tmp, type, cache)};
             if (!is_private && !subscript_res) return false;
@@ -982,7 +993,7 @@ public:
         bool any_success{!is_private};
 
         for (const auto& pubkey : m_pubkey_args) {
-            if (pos++) ret += ",";
+            if (pos++) ret += ',';
             std::string tmp;
             switch (type) {
                 case StringType::NORMALIZED:
@@ -1985,7 +1996,7 @@ std::vector<std::unique_ptr<PubkeyProvider>> ParsePubkeyInner(uint32_t& key_exp_
     std::vector<std::unique_ptr<PubkeyProvider>> ret;
     bool permit_uncompressed = ctx == ParseScriptContext::TOP || ctx == ParseScriptContext::P2SH;
     auto split = Split(sp, '/');
-    std::string str(split[0].begin(), split[0].end());
+    std::string_view str(split[0].data(), split[0].size());
     if (str.size() == 0) {
         error = "No key provided";
         return {};
@@ -2038,8 +2049,7 @@ std::vector<std::unique_ptr<PubkeyProvider>> ParsePubkeyInner(uint32_t& key_exp_
             }
         }
     }
-    CExtKey extkey = DecodeExtKey(str);
-    CExtPubKey extpubkey = DecodeExtPubKey(str);
+    auto [extkey, extpubkey] = DecodeExtKeyOrPubKey(str);
     if (!extkey.key.IsValid() && !extpubkey.pubkey.IsValid()) {
         error = strprintf("key '%s' is not valid", str);
         return {};

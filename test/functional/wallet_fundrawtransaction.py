@@ -48,8 +48,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         ] for i in range(self.num_nodes)]
 
         self.setup_clean_chain = True
-        # whitelist peers to speed up tx relay / mempool sync
-        self.noban_tx_relay = True
+        self.noban_tx_relay = True  # faster tx relay
         self.rpc_timeout = 90  # to prevent timeouts in `test_transaction_too_large`
         self.supports_cli = False
 
@@ -915,6 +914,12 @@ class RawTransactionsTest(BitcoinTestFramework):
 
     def test_option_subtract_fee_from_outputs(self):
         self.log.info("Test fundrawtxn subtractFeeFromOutputs option")
+
+        assert_raises_rpc_error(
+            -8, "Use subtract_fee_from_outputs (subtractFeeFromOutputs is deprecated). Do not set both.",
+            self.nodes[3].fundrawtransaction, hexstring="02000000000000000000",
+            options={"subtract_fee_from_outputs": [0], "subtractFeeFromOutputs": [0]}
+        )
 
         # Make sure there is exactly one input so coin selection can't skew the result.
         assert_equal(len(self.nodes[3].listunspent(1)), 1)

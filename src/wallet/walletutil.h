@@ -8,6 +8,8 @@
 #include <script/descriptor.h>
 #include <util/fs.h>
 
+#include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace wallet {
@@ -54,6 +56,28 @@ enum WalletFlags : uint64_t {
 
     //! Indicates that the wallet needs an external signer
     WALLET_FLAG_EXTERNAL_SIGNER = (1ULL << 35),
+};
+
+// Version numbers for the wallet client that opens a wallet
+// These numbers will be written as the last client version in the "version" record and can be used to detect
+// when an upgrade-downgrade-upgrade was performed. However, we should prefer to use LastClientFeatures rather
+// than new version numbers.
+// New version numbers must be greater than 329900 which is guaranteed by setting bit 19
+enum WalletClientVersion : int32_t {
+    MIN_VERSION = (1L << 19),
+
+    // The wallet client supports the records for LastClientFeatures
+    VERSION_LAST_CLIENT_FEATURES = MIN_VERSION + 1,
+
+    VERSION_LATEST = VERSION_LAST_CLIENT_FEATURES
+};
+
+enum LastClientFeatures : uint64_t {
+    // Flags indicating the automatic upgrade features supported by the wallet client that last opened a wallet file
+    // New automatic upgrades must define a flag here so that upgrade-downgrade-upgrade can be detected to determine whether
+    // an automatic upgrade should be performed.
+
+    WALLET_CLIENT_FEATURES = 0
 };
 
 //! Get the path of the wallet directory.
@@ -147,7 +171,7 @@ public:
     bool IsCanonicallyEquivalent(const WalletDescriptor& other) const;
 };
 
-WalletDescriptor GenerateWalletDescriptor(const CExtPubKey& master_key, const OutputType& output_type, bool internal);
+WalletDescriptor GenerateWalletDescriptor(const CExtPubKey& master_key, const OutputType& output_type, bool internal, std::optional<int64_t> timestamp = std::nullopt);
 } // namespace wallet
 
 #endif // BITCOIN_WALLET_WALLETUTIL_H

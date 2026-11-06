@@ -7,12 +7,15 @@
 
 #include <wallet/rpc/wallet.h>
 
+#include <chain.h>
 #include <coins.h>
 #include <core_io.h>
+#include <interfaces/chain.h>
 #include <key.h>
 #include <key_io.h>
 #include <rpc/server.h>
 #include <rpc/util.h>
+#include <uint256.h>
 #include <univalue.h>
 #include <util/bip32.h>
 #include <util/translation.h>
@@ -25,6 +28,7 @@
 #include <wallet/walletutil.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <optional>
 #include <string_view>
 
@@ -317,7 +321,7 @@ static RPCMethod setwalletflag()
     if (!pwallet) return UniValue::VNULL;
 
     std::string flag_str = request.params[0].get_str();
-    bool value = request.params[1].isNull() || request.params[1].get_bool();
+    const bool value{self.Arg<bool>("value")};
 
     if (!STRING_TO_WALLET_FLAG.contains(flag_str)) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Unknown wallet flag: %s", flag_str));
@@ -388,11 +392,11 @@ static RPCMethod createwallet()
 {
     WalletContext& context = EnsureWalletContext(request.context);
     uint64_t flags = 0;
-    if (!request.params[1].isNull() && request.params[1].get_bool()) {
+    if (self.Arg<bool>("disable_private_keys")) {
         flags |= WALLET_FLAG_DISABLE_PRIVATE_KEYS;
     }
 
-    if (!request.params[2].isNull() && request.params[2].get_bool()) {
+    if (self.Arg<bool>("blank")) {
         flags |= WALLET_FLAG_BLANK_WALLET;
     }
     SecureString passphrase;
@@ -406,14 +410,14 @@ static RPCMethod createwallet()
         }
     }
 
-    if (!request.params[4].isNull() && request.params[4].get_bool()) {
+    if (self.Arg<bool>("avoid_reuse")) {
         flags |= WALLET_FLAG_AVOID_REUSE;
     }
     flags |= WALLET_FLAG_DESCRIPTORS;
     if (!self.Arg<bool>("descriptors")) {
         throw JSONRPCError(RPC_WALLET_ERROR, "descriptors argument must be set to \"true\"; it is no longer possible to create a legacy wallet.");
     }
-    if (!request.params[7].isNull() && request.params[7].get_bool()) {
+    if (self.Arg<bool>("external_signer")) {
 #ifdef ENABLE_EXTERNAL_SIGNER
         flags |= WALLET_FLAG_EXTERNAL_SIGNER;
 #else
@@ -750,6 +754,9 @@ static RPCMethod createwalletdescriptor()
             {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "", {
                 {"internal", RPCArg::Type::BOOL, RPCArg::DefaultHint{"Both external and internal will be generated unless this parameter is specified"}, "Whether to only make one descriptor that is internal (if parameter is true) or external (if parameter is false)"},
                 {"hdkey", RPCArg::Type::STR, RPCArg::DefaultHint{"The HD key used by all other active descriptors"}, "The HD key that the wallet knows the private key of, listed using 'gethdkeys', to use for this descriptor's key"},
+                {"timestamp", RPCArg::Type::NUM, RPCArg::DefaultHint{"The current time, with no rescan"}, "The creation time of the new descriptors, in " + UNIX_EPOCH_TIME + ". "
+                    "When restoring a key that may already have been used, set this to the key's creation time or earlier. "
+                    "The blockchain is then rescanned from 2 hours before this time, which can take a long time."},
             }},
         },
         RPCResult{
@@ -777,6 +784,13 @@ static RPCMethod createwalletdescriptor()
             UniValue options{request.params[1].isNull() ? UniValue::VOBJ : request.params[1]};
             UniValue internal_only{options["internal"]};
             UniValue hdkey{options["hdkey"]};
+            std::optional<int64_t> timestamp;
+            if (!options["timestamp"].isNull()) {
+                timestamp = options["timestamp"].getInt<int64_t>();
+                if (*timestamp < 0) {
+                    throw JSONRPCError(RPC_INVALID_PARAMETER, "Timestamp must not be negative");
+                }
+            }
 
             std::vector<bool> internals;
             if (internal_only.isNull()) {
@@ -786,49 +800,89 @@ static RPCMethod createwalletdescriptor()
                 internals.push_back(internal_only.get_bool());
             }
 
-            LOCK(pwallet->cs_wallet);
-            EnsureWalletIsUnlocked(*pwallet);
-
-            CExtPubKey xpub;
-            if (hdkey.isNull()) {
-                HDPubKeyMap active_xpubs = pwallet->GetHDPubKeys(HDKeyFilter::Active);
-                if (active_xpubs.size() != 1) {
-                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unable to determine which HD key to use from active descriptors. Please specify with 'hdkey'");
-                }
-                xpub = active_xpubs.begin()->first;
-            } else {
-                xpub = DecodeExtPubKey(hdkey.get_str());
-                if (!xpub.pubkey.IsValid()) {
-                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unable to parse HD key. Please provide a valid xpub");
+            WalletRescanReserver reserver(*pwallet);
+            if (timestamp) {
+                // Make sure the rescan covers at least the most recent block
+                // the user could have gotten from another RPC command prior to now
+                pwallet->BlockUntilSyncedToCurrentChain();
+                if (!reserver.reserve(/*with_passphrase=*/true)) {
+                    throw JSONRPCError(RPC_WALLET_ERROR, "Wallet is currently rescanning. Abort existing rescan or wait.");
                 }
             }
 
-            std::optional<CKey> key = pwallet->GetKey(xpub.pubkey.GetID());
-            if (!key) {
-                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Private key for %s is not known", EncodeExtPubKey(xpub)));
-            }
-            CExtKey active_hdkey(xpub, *key);
-
-            std::vector<std::reference_wrapper<DescriptorScriptPubKeyMan>> spkms;
-            WalletBatch batch{pwallet->GetDatabase()};
-            for (bool internal : internals) {
-                WalletDescriptor w_desc = GenerateWalletDescriptor(xpub, *output_type, internal);
-                if (!pwallet->GetDescriptorScriptPubKeyMan(w_desc)) {
-                    spkms.emplace_back(pwallet->SetupDescriptorScriptPubKeyMan(batch, active_hdkey, *output_type, internal));
-                }
-            }
-            if (spkms.empty()) {
-                throw JSONRPCError(RPC_WALLET_ERROR, "Descriptor already exists");
-            }
-
-            // Fetch each descspkm from the wallet in order to get the descriptor strings
+            // Keep the wallet unlocked during the rescan, which may top up the keypool.
+            LOCK(pwallet->m_relock_mutex);
+            std::optional<int> start_height;
+            uint256 start_block;
             UniValue descs{UniValue::VARR};
-            for (const auto& spkm : spkms) {
-                std::string desc_str;
-                bool ok = spkm.get().GetDescriptorString(desc_str, false);
-                CHECK_NONFATAL(ok);
-                descs.push_back(desc_str);
+            {
+                LOCK(pwallet->cs_wallet);
+                EnsureWalletIsUnlocked(*pwallet);
+
+                if (timestamp) {
+                    int height;
+                    if (pwallet->chain().findFirstBlockWithTimeAndHeight(*timestamp - TIMESTAMP_WINDOW, 0, interfaces::FoundBlock().hash(start_block).height(height))) {
+                        // Fail before adding anything if the rescan cannot read the blocks.
+                        if (!pwallet->chain().hasBlocks(pwallet->GetLastBlockHash(), height, /*max_height=*/{})) {
+                            throw JSONRPCError(RPC_MISC_ERROR, "Can't rescan from this timestamp because the blocks are unavailable, for example because they are pruned. Use a later timestamp or download the blocks again.");
+                        }
+                        start_height = height;
+                    }
+                }
+
+                CExtPubKey xpub;
+                if (hdkey.isNull()) {
+                    HDPubKeyMap active_xpubs = pwallet->GetHDPubKeys(HDKeyFilter::Active);
+                    if (active_xpubs.size() != 1) {
+                        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unable to determine which HD key to use from active descriptors. Please specify with 'hdkey'");
+                    }
+                    xpub = active_xpubs.begin()->first;
+                } else {
+                    xpub = DecodeExtPubKey(hdkey.get_str());
+                    if (!xpub.pubkey.IsValid()) {
+                        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unable to parse HD key. Please provide a valid xpub");
+                    }
+                }
+
+                std::optional<CKey> key = pwallet->GetKey(xpub.pubkey.GetID());
+                if (!key) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Private key for %s is not known", EncodeExtPubKey(xpub)));
+                }
+                CExtKey active_hdkey(xpub, *key);
+
+                std::vector<std::reference_wrapper<DescriptorScriptPubKeyMan>> spkms;
+                WalletBatch batch{pwallet->GetDatabase()};
+                for (bool internal : internals) {
+                    WalletDescriptor w_desc = GenerateWalletDescriptor(xpub, *output_type, internal);
+                    if (!pwallet->GetDescriptorScriptPubKeyMan(w_desc)) {
+                        spkms.emplace_back(pwallet->SetupDescriptorScriptPubKeyMan(batch, active_hdkey, *output_type, internal, timestamp));
+                    }
+                }
+                if (spkms.empty()) {
+                    throw JSONRPCError(RPC_WALLET_ERROR, "Descriptor already exists");
+                }
+
+                // Fetch each descspkm from the wallet in order to get the descriptor strings
+                for (const auto& spkm : spkms) {
+                    std::string desc_str;
+                    bool ok = spkm.get().GetDescriptorString(desc_str, false);
+                    CHECK_NONFATAL(ok);
+                    descs.push_back(desc_str);
+                }
             }
+
+            if (start_height) {
+                ScanResult result{pwallet->Scanner().Scan(start_block, *start_height, /*max_height=*/{}, reserver, /*save_progress=*/false)};
+                switch (result.status) {
+                case ScanResult::SUCCESS:
+                    break;
+                case ScanResult::FAILURE:
+                    throw JSONRPCError(RPC_MISC_ERROR, "The descriptors were added, but the rescan failed. Potentially corrupted data files.");
+                case ScanResult::USER_ABORT:
+                    throw JSONRPCError(RPC_MISC_ERROR, "The descriptors were added, but the rescan was aborted. Use rescanblockchain to finish it.");
+                } // no default case, so the compiler can warn about missing cases
+            }
+
             UniValue out{UniValue::VOBJ};
             out.pushKV("descs", std::move(descs));
             return out;
@@ -1069,7 +1123,6 @@ RPCMethod walletdisplayaddress();
 
 // backup
 RPCMethod importprunedfunds();
-RPCMethod removeprunedfunds();
 RPCMethod importdescriptors();
 RPCMethod listdescriptors();
 RPCMethod backupwallet();
@@ -1161,7 +1214,6 @@ std::span<const CRPCCommand> GetWalletRPCCommands()
         {"wallet", &loadwallet},
         {"wallet", &lockunspent},
         {"wallet", &migratewallet},
-        {"wallet", &removeprunedfunds},
         {"wallet", &rescanblockchain},
         {"wallet", &send},
         {"wallet", &sendmany},

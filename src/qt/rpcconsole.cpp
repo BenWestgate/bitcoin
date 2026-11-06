@@ -73,6 +73,7 @@ namespace {
 
 // don't add private key handling cmd's to the history
 const QStringList historyFilter = QStringList()
+    << "addhdkey"
     << "createwallet"
     << "createwalletdescriptor"
     << "migratewallet"
@@ -189,7 +190,7 @@ bool RPCConsole::RPCParseCommandLine(interfaces::Node* node, std::string &strRes
 
     std::string strCommandTerminated = strCommand;
     if (strCommandTerminated.back() != '\n')
-        strCommandTerminated += "\n";
+        strCommandTerminated += '\n';
     for (chpos = 0; chpos < strCommandTerminated.size(); ++chpos)
     {
         char ch = strCommandTerminated[chpos];
@@ -793,9 +794,9 @@ static QString categoryClass(int category)
 {
     switch(category)
     {
-    case RPCConsole::CMD_REQUEST:  return "cmd-request"; break;
-    case RPCConsole::CMD_REPLY:    return "cmd-reply"; break;
-    case RPCConsole::CMD_ERROR:    return "cmd-error"; break;
+    case RPCConsole::CMD_REQUEST:  return "cmd-request";
+    case RPCConsole::CMD_REPLY:    return "cmd-reply";
+    case RPCConsole::CMD_ERROR:    return "cmd-error";
     default:                       return "misc";
     }
 }

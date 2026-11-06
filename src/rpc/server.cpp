@@ -36,6 +36,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <variant>
+#include <vector>
 
 using util::SplitString;
 
@@ -110,7 +111,7 @@ std::string CRPCTable::help(std::string_view strCommand, const JSONRPCRequest& h
                 if (category != pcmd->category)
                 {
                     if (!category.empty())
-                        strRet += "\n";
+                        strRet += '\n';
                     category = pcmd->category;
                     strRet += "== " + Capitalize(category) + " ==\n";
                 }
@@ -359,7 +360,7 @@ UniValue OpenRPCArgSchema(const RPCArg& arg, bool include_hidden, bool in_skip_t
         schema = MakeObject({{"type", "string"}});
         break;
     case RPCArg::Type::STR_HEX:
-        schema = MakeObject({{"type", "string"}, {"pattern", "^[0-9a-fA-F]+$"}});
+        schema = MakeObject({{"type", "string"}, {"pattern", "^([0-9a-fA-F]{2})*$"}});
         break;
     case RPCArg::Type::NUM:
         schema = MakeObject({{"type", "number"}});
@@ -460,7 +461,7 @@ UniValue OpenRPCResultSchema(const RPCResult& result)
     case RPCResult::Type::STR_AMOUNT:
         return MakeObject({{"type", "number"}, {"x-bitcoin-unit", "amount"}});
     case RPCResult::Type::STR_HEX:
-        return MakeObject({{"type", "string"}, {"pattern", "^[0-9a-fA-F]+$"}});
+        return MakeObject({{"type", "string"}, {"pattern", "^([0-9a-fA-F]{2})*$"}});
     case RPCResult::Type::NUM:
         return MakeObject({{"type", "number"}});
     case RPCResult::Type::NUM_TIME: {
@@ -635,9 +636,7 @@ bool CRPCTable::removeCommand(const std::string& name, const CRPCCommand* pcmd)
 {
     auto it = mapCommands.find(name);
     if (it != mapCommands.end()) {
-        auto new_end = std::remove(it->second.begin(), it->second.end(), pcmd);
-        if (it->second.end() != new_end) {
-            it->second.erase(new_end, it->second.end());
+        if (std::erase(it->second, pcmd)) {
             if (it->second.empty()) {
                 mapCommands.erase(it);
             }

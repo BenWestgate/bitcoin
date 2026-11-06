@@ -25,6 +25,7 @@
 #include <netbase.h>
 #include <node/block_template_manager.h>
 #include <node/blockstorage.h>
+#include <node/block_validation_state_catcher.h>
 #include <node/context.h>
 #include <node/miner.h>
 #include <node/mining_args.h>
@@ -312,8 +313,8 @@ static RPCMethod generatetoaddress()
                 },
         [](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
-    const int num_blocks{request.params[0].getInt<int>()};
-    const uint64_t max_tries{request.params[2].isNull() ? DEFAULT_MAX_TRIES : request.params[2].getInt<int>()};
+    const int num_blocks{self.Arg<int>("nblocks")};
+    const uint64_t max_tries{self.Arg<uint64_t>("maxtries")};
 
     CTxDestination destination = DecodeDestination(request.params[1].get_str());
     if (!IsValidDestination(destination)) {
@@ -399,7 +400,7 @@ static RPCMethod generateblock()
         }
     }
 
-    const bool process_new_block{request.params[2].isNull() ? true : request.params[2].get_bool()};
+    const bool process_new_block{self.Arg<bool>("submit")};
     CBlock block;
 
     ChainstateManager& chainman = EnsureChainman(node);
@@ -805,7 +806,7 @@ static RPCMethod getblocktemplate()
         }
     }
 
-    static unsigned int nTransactionsUpdatedLast;
+    static uint32_t nTransactionsUpdatedLast;
     const CTxMemPool& mempool = EnsureMemPool(node);
 
     WAIT_LOCK(cs_main, cs_main_lock);
@@ -828,7 +829,7 @@ static RPCMethod getblocktemplate()
          * The longpollid is assumed to be a tip hash if it has the right format.
          */
         uint256 hashWatchedChain;
-        unsigned int nTransactionsUpdatedLastLP;
+        uint32_t nTransactionsUpdatedLastLP;
 
         if (lpval.isStr())
         {
@@ -838,7 +839,7 @@ static RPCMethod getblocktemplate()
             // Assume the longpollid is a block hash. If it's not then we return
             // early below.
             hashWatchedChain = ParseHashV(lpstr.substr(0, 64), "longpollid");
-            nTransactionsUpdatedLastLP = LocaleIndependentAtoi<int64_t>(lpstr.substr(64));
+            nTransactionsUpdatedLastLP = static_cast<uint32_t>(LocaleIndependentAtoi<int64_t>(lpstr.substr(64)));
         }
         else
         {
@@ -1066,24 +1067,6 @@ static RPCMethod getblocktemplate()
     };
 }
 
-class submitblock_StateCatcher final : public CValidationInterface
-{
-public:
-    uint256 hash;
-    bool found{false};
-    BlockValidationState state;
-
-    explicit submitblock_StateCatcher(const uint256 &hashIn) : hash(hashIn), state() {}
-
-protected:
-    void BlockChecked(const std::shared_ptr<const CBlock>& block, const BlockValidationState& stateIn) override
-    {
-        if (block->GetHash() != hash) return;
-        found = true;
-        state = stateIn;
-    }
-};
-
 static RPCMethod submitblock()
 {
     // We allow 2 arguments for compliance with BIP22. Argument 2 is ignored.
@@ -1122,17 +1105,17 @@ static RPCMethod submitblock()
     }
 
     bool new_block;
-    auto sc = std::make_shared<submitblock_StateCatcher>(block.GetHash());
+    auto sc = std::make_shared<node::BlockValidationStateCatcher>(block.GetHash());
     CHECK_NONFATAL(chainman.m_options.signals)->RegisterSharedValidationInterface(sc);
     bool accepted = chainman.ProcessNewBlock(blockptr, /*force_processing=*/true, /*min_pow_checked=*/true, /*new_block=*/&new_block);
     CHECK_NONFATAL(chainman.m_options.signals)->UnregisterSharedValidationInterface(sc);
     if (!new_block && accepted) {
         return "duplicate";
     }
-    if (!sc->found) {
+    if (!sc->m_state) {
         return "inconclusive";
     }
-    return BIP22ValidationResult(sc->state);
+    return BIP22ValidationResult(*sc->m_state);
 },
     };
 }

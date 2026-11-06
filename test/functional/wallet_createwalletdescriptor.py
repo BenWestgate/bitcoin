@@ -4,10 +4,12 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test wallet createwalletdescriptor RPC."""
 
+from test_framework.blocktools import COINBASE_MATURITY
 from test_framework.descriptors import descsum_create
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
+    assert_greater_than,
     assert_raises_rpc_error,
 )
 from test_framework.wallet_util import WalletUnlock
@@ -17,6 +19,8 @@ class WalletCreateDescriptorTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 1
+        # Small block files, so test_timestamp can prune the early blocks
+        self.extra_args = [["-fastprune"]]
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
@@ -25,6 +29,7 @@ class WalletCreateDescriptorTest(BitcoinTestFramework):
         self.test_basic()
         self.test_imported_other_keys()
         self.test_encrypted()
+        self.test_timestamp()
 
     def test_basic(self):
         def_wallet = self.nodes[0].get_wallet_rpc(self.default_wallet_name)
@@ -113,6 +118,50 @@ class WalletCreateDescriptorTest(BitcoinTestFramework):
 
         with WalletUnlock(wallet, "pass"):
             wallet.createwalletdescriptor(type="bech32m")
+
+    def test_timestamp(self):
+        self.log.info("Test createwalletdescriptor timestamp with a key that was already used")
+        node = self.nodes[0]
+        def_wallet = node.get_wallet_rpc(self.default_wallet_name)
+        node.createwallet("used_key")
+        used_wallet = node.get_wallet_rpc("used_key")
+        xprv = used_wallet.gethdkeys(private=True)[0]["xprv"]
+        address = used_wallet.getnewaddress(address_type="bech32")
+        self.generatetoaddress(node, COINBASE_MATURITY + 1, def_wallet.getnewaddress())
+        def_wallet.sendtoaddress(address, 1)
+        self.generate(node, 1)
+        assert_equal(used_wallet.getbalance(), 1)
+
+        node.createwallet("restore_now", blank=True)
+        wallet = node.get_wallet_rpc("restore_now")
+        xpub = wallet.addhdkey(xprv)["xpub"]
+        assert_raises_rpc_error(-8, "Timestamp must not be negative", wallet.createwalletdescriptor, type="bech32", hdkey=xpub, timestamp=-1)
+        wallet.createwalletdescriptor(type="bech32", hdkey=xpub)
+        assert_equal(wallet.getbalance(), 0)
+
+        node.createwallet("restore_timestamp", blank=True)
+        wallet = node.get_wallet_rpc("restore_timestamp")
+        xpub = wallet.addhdkey(xprv)["xpub"]
+        descs = wallet.createwalletdescriptor(type="bech32", hdkey=xpub, timestamp=0)["descs"]
+        assert_equal(wallet.getbalance(), 1)
+        assert_equal(wallet.getaddressinfo(address)["ismine"], True)
+        timestamps = {d["desc"]: d["timestamp"] for d in wallet.listdescriptors()["descriptors"]}
+        assert_equal([timestamps[desc] for desc in descs], [0, 0])
+        assert_equal(wallet.getwalletinfo()["birthtime"], 0)
+
+        self.log.info("Test createwalletdescriptor timestamp fails before adding descriptors when blocks are pruned")
+        self.restart_node(0, extra_args=["-prune=1", "-fastprune=1"])
+        # Keep more than 288 blocks above the pruned files, so that the first
+        # block file (which holds the payment at height 102) can be pruned.
+        self.generate(node, 700)
+        node.pruneblockchain(400)
+        assert_greater_than(node.getblockchaininfo()["pruneheight"], 102)
+        node.createwallet("restore_pruned", blank=True)
+        wallet = node.get_wallet_rpc("restore_pruned")
+        xpub = wallet.addhdkey(xprv)["xpub"]
+        descs_before = wallet.listdescriptors()["descriptors"]
+        assert_raises_rpc_error(-1, "Can't rescan from this timestamp because the blocks are unavailable", wallet.createwalletdescriptor, type="bech32", hdkey=xpub, timestamp=0)
+        assert_equal(wallet.listdescriptors()["descriptors"], descs_before)
 
 
 

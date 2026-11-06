@@ -106,33 +106,25 @@ BASE_SCRIPTS = [
     'feature_taproot.py',
     'feature_block.py',
     'mempool_ephemeral_dust.py',
-    'wallet_conflicts.py',
     'p2p_opportunistic_1p1c.py',
-    'p2p_node_network_limited.py --v1transport',
-    'p2p_node_network_limited.py --v2transport',
     # vv Tests less than 2m vv
     'mining_getblocktemplate_longpoll.py',
     'p2p_segwit.py',
-    'feature_maxuploadtarget.py',
     'feature_assumeutxo.py',
     'mempool_updatefromblock.py',
     'mempool_persist.py',
     # vv Tests less than 60s vv
+    'interface_http.py',
     'rpc_psbt.py',
     'wallet_fundrawtransaction.py',
     'wallet_bumpfee.py',
     'wallet_v3_txs.py',
-    'wallet_backup.py',
-    'feature_segwit.py --v2transport',
-    'feature_segwit.py --v1transport',
     'p2p_tx_download.py',
     'feature_txindex_compatibility.py',
     'wallet_avoidreuse.py',
     'feature_abortnode.py',
-    'wallet_address_types.py',
     'p2p_orphan_handling.py',
     'wallet_basic.py',
-    'feature_maxtipage.py',
     'wallet_multiwallet.py',
     'wallet_multiwallet.py --usecli',
     'p2p_dns_seeds.py',
@@ -147,16 +139,16 @@ BASE_SCRIPTS = [
     'rpc_bind.py --nonloopback',
     'p2p_headers_sync_with_minchainwork.py',
     'p2p_feefilter.py',
-    'feature_csv_activation.py',
-    'p2p_sendheaders.py',
     'feature_config_args.py',
     'wallet_listtransactions.py',
     'wallet_listrawtransactions.py',
     'wallet_miniscript.py',
     # vv Tests less than 30s vv
+    'feature_maxuploadtarget.py',
     'wallet_deprecated_rbf.py',
     'p2p_invalid_messages.py',
     'rpc_echo_payload.py',
+    'feature_torcontrol.py',
     'rpc_createmultisig.py',
     'p2p_timeouts.py --v1transport',
     'p2p_timeouts.py --v2transport',
@@ -168,11 +160,17 @@ BASE_SCRIPTS = [
     'wallet_listreceivedby.py',
     'wallet_abandonconflict.py',
     'wallet_anchor.py',
+    'wallet_conflicts.py',
+    'wallet_backup.py',
+    'wallet_address_types.py',
     'feature_reindex.py',
     'feature_reindex_readonly.py',
     'wallet_labels.py',
     'p2p_compactblocks.py',
     'p2p_compactblocks_blocksonly.py',
+    'p2p_node_network_limited.py --v1transport',
+    'p2p_node_network_limited.py --v2transport',
+    'p2p_sendheaders.py',
     'wallet_hd.py',
     'wallet_blank.py',
     'wallet_keypool_topup.py',
@@ -186,6 +184,10 @@ BASE_SCRIPTS = [
     'rpc_validateaddress.py',
     'interface_bitcoin_cli.py',
     'feature_bind_extra.py',
+    'feature_maxtipage.py',
+    'feature_csv_activation.py',
+    'feature_segwit.py --v2transport',
+    'feature_segwit.py --v1transport',
     'mempool_resurrect.py',
     'wallet_txn_doublespend.py --mineblock',
     'tool_bitcoin_chainstate.py',
@@ -195,6 +197,7 @@ BASE_SCRIPTS = [
     'wallet_txn_clone.py',
     'wallet_txn_clone.py --segwit',
     'rpc_getchaintips.py',
+    'feature_io_errors.py',
     'rpc_misc.py',
     'p2p_1p1c_network.py',
     'interface_rest.py',
@@ -208,7 +211,6 @@ BASE_SCRIPTS = [
     'wallet_createwallet.py',
     'wallet_reindex.py',
     'wallet_reorgsrestore.py',
-    'interface_http.py',
     'interface_rpc.py',
     'interface_usdt_coinselection.py',
     'interface_usdt_mempool.py',
@@ -323,6 +325,7 @@ BASE_SCRIPTS = [
     'feature_minchainwork.py',
     'rpc_estimatefee.py',
     'p2p_private_broadcast.py',
+    'p2p_private_broadcast_completion.py',
     'p2p_private_broadcast_cap.py',
     'rpc_getblockstats.py',
     'feature_port.py',
@@ -358,6 +361,7 @@ BASE_SCRIPTS = [
     'rpc_deriveaddresses.py',
     'rpc_deriveaddresses.py --usecli',
     'p2p_ping.py',
+    'p2p_ping_ibd.py',
     'p2p_tx_privacy.py',
     'rpc_getdescriptoractivity.py',
     'rpc_scanblocks.py',
@@ -365,7 +369,6 @@ BASE_SCRIPTS = [
     'p2p_sendtxrcncl.py',
     'p2p_connection_limits.py',
     'rpc_scantxoutset.py',
-    'feature_torcontrol.py',
     'feature_unsupported_utxo_db.py',
     'mempool_cluster.py',
     'feature_logging.py',
@@ -397,6 +400,7 @@ BASE_SCRIPTS = [
     'p2p_handshake.py',
     'p2p_handshake.py --v2transport',
     'interface_ipc_cli.py',
+    'interface_ipc_init.py',
     'feature_dirsymlinks.py',
     'feature_help.py',
     'feature_framework_startup_failures.py',
@@ -555,6 +559,11 @@ def main():
         # Remove it, and expand it for each bench in the list
         test_list.remove(TOOL_BENCH_SANITY_CHECK)
         bench_cmd = Binaries(get_binary_paths(config), bin_dir=None).bench_argv() + ["-list"]
+        bench_cmd = [
+            sys.executable,
+            pathlib.Path(config["environment"]["BUILDDIR"]) / "test" / "with_sanitizer_env.py",
+            *bench_cmd,
+        ]
         bench_list = subprocess.check_output(bench_cmd, text=True).splitlines()
         bench_list = [f"{TOOL_BENCH_SANITY_CHECK} --bench={b}" for b in bench_list]
         # Start with special scripts (variable, unknown runtime)
@@ -652,7 +661,7 @@ def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, ar
         flags=flags,
         use_term_control=use_term_control,
     )
-    start_time = time.time()
+    start_time = time.monotonic()
     test_results = []
 
     max_len_name = len(max(test_list, key=len))
@@ -694,7 +703,7 @@ def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, ar
                              f"Test execution data left in {tmpdir}.\n"
                              f"Additional storage is needed to execute testing.")
 
-    runtime = int(time.time() - start_time)
+    runtime = int(time.monotonic() - start_time)
     print_results(test_results, max_len_name, runtime)
     if results_filepath:
         write_results(test_results, results_filepath, runtime)
@@ -788,7 +797,7 @@ class TestHandler:
 
             task = [
                 test,
-                time.time(),
+                time.monotonic(),
                 subprocess.Popen(
                     [sys.executable, self.tests_dir + test_argv[0]] + test_argv[1:] + self.flags + portseed_arg + tmpdir_arg,
                     text=True,
@@ -832,7 +841,7 @@ class TestHandler:
                     clearline = '\r' + (' ' * dot_count) + '\r'
                     print(clearline, end='', flush=True)
                 dot_count = 0
-                ret.append((TestResult(name, status, int(time.time() - start_time)), testdir, stdout, stderr, proc.returncode, skip_reason))
+                ret.append((TestResult(name, status, int(time.monotonic() - start_time)), testdir, stdout, stderr, proc.returncode, skip_reason))
             if ret:
                 return ret
             if self.use_term_control:

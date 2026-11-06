@@ -32,9 +32,9 @@ fs::path GetWalletDir()
     return path;
 }
 
-WalletDescriptor GenerateWalletDescriptor(const CExtPubKey& master_key, const OutputType& addr_type, bool internal)
+WalletDescriptor GenerateWalletDescriptor(const CExtPubKey& master_key, const OutputType& addr_type, bool internal, std::optional<int64_t> timestamp)
 {
-    int64_t creation_time = GetTime();
+    const int64_t creation_time{timestamp.value_or(GetTime())};
 
     std::string xpub = EncodeExtPubKey(master_key);
 
@@ -48,7 +48,7 @@ WalletDescriptor GenerateWalletDescriptor(const CExtPubKey& master_key, const Ou
     }
     case OutputType::P2SH_SEGWIT: {
         desc_prefix = "sh(wpkh(" + xpub + "/49h";
-        desc_suffix += ")";
+        desc_suffix += ')';
         break;
     }
     case OutputType::BECH32: {
