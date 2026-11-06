@@ -206,6 +206,13 @@ static int GetChainParams(const std::vector<std::string>& args, std::string& str
         result.pushKV("addresses", addr);
     }
 
+    {
+        UniValue storage{UniValue::VOBJ};
+        storage.pushKV("assumed_blockchain_gib", params.AssumedBlockchainSize());
+        storage.pushKV("assumed_chain_state_gib", params.AssumedChainStateSize());
+        result.pushKV("storage", storage);
+    }
+
     strPrint = result.write(/*prettyIndent=*/2);
     return EXIT_SUCCESS;
 }

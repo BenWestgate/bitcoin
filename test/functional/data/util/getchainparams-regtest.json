@@ -15,5 +15,9 @@
   },
   "addresses": {
     "bech32_hrp": "bcrt"
+  },
+  "storage": {
+    "assumed_blockchain_gib": 0,
+    "assumed_chain_state_gib": 0
   }
 }

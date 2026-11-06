@@ -24,5 +24,9 @@
   },
   "addresses": {
     "bech32_hrp": "bc"
+  },
+  "storage": {
+    "assumed_blockchain_gib": 897,
+    "assumed_chain_state_gib": 14
   }
 }
