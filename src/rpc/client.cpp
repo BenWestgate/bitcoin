@@ -356,6 +356,7 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "derivehdkey", 1, "private" },
     { "createwalletdescriptor", 1, "options" },
     { "createwalletdescriptor", 1, "internal" },
+    { "createwalletdescriptor", 1, "timestamp" },
     // Echo with conversion (For testing only)
     { "echojson", 0, "arg0" },
     { "echojson", 1, "arg1" },
