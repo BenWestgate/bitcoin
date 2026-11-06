@@ -866,9 +866,9 @@ std::unique_ptr<DescriptorScriptPubKeyMan> DescriptorScriptPubKeyMan::LoadFromSt
     return std::unique_ptr<DescriptorScriptPubKeyMan>(new DescriptorScriptPubKeyMan(storage, id, descriptor, keypool_size, keys, ckeys));
 }
 
-std::unique_ptr<DescriptorScriptPubKeyMan> DescriptorScriptPubKeyMan::GenerateNewSingleSig(WalletStorage& storage, WalletBatch& batch, int64_t keypool_size, const CExtKey& master_key, OutputType addr_type, bool internal)
+std::unique_ptr<DescriptorScriptPubKeyMan> DescriptorScriptPubKeyMan::GenerateNewSingleSig(WalletStorage& storage, WalletBatch& batch, int64_t keypool_size, const CExtKey& master_key, OutputType addr_type, bool internal, std::optional<int64_t> timestamp)
 {
-    WalletDescriptor desc = GenerateWalletDescriptor(master_key.Neuter(), addr_type, internal);
+    WalletDescriptor desc = GenerateWalletDescriptor(master_key.Neuter(), addr_type, internal, timestamp);
 
     auto spkm = std::unique_ptr<DescriptorScriptPubKeyMan>(new DescriptorScriptPubKeyMan(storage, desc, keypool_size));
 

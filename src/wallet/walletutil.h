@@ -8,6 +8,8 @@
 #include <script/descriptor.h>
 #include <util/fs.h>
 
+#include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace wallet {
@@ -169,7 +171,7 @@ public:
     bool IsCanonicallyEquivalent(const WalletDescriptor& other) const;
 };
 
-WalletDescriptor GenerateWalletDescriptor(const CExtPubKey& master_key, const OutputType& output_type, bool internal);
+WalletDescriptor GenerateWalletDescriptor(const CExtPubKey& master_key, const OutputType& output_type, bool internal, std::optional<int64_t> timestamp = std::nullopt);
 } // namespace wallet
 
 #endif // BITCOIN_WALLET_WALLETUTIL_H
