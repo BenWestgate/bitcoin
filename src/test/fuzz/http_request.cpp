@@ -27,9 +27,6 @@ using namespace bitcoin_http;
 namespace {
 
 //! A fully parsed request must have a body consistent with its framing headers.
-//! Before libevent was replaced with HTTPRequest (#35182), ReadBody() always
-//! returned an empty string; LoadBody() now populates the body per RFC 9112
-//! framing, so mirror its branch logic here.
 void CheckBodyMatchesFraming(const HTTPRequest& req)
 {
     const std::string body{req.ReadBody()};
@@ -54,9 +51,7 @@ void SingleShotParse(const std::string& http_buffer, FuzzedDataProvider& provide
     HTTPRequest http_request;
     LineReader reader(http_buffer, MAX_HEADERS_SIZE);
     try {
-        if (!http_request.LoadControlData(reader)) return;
-        if (!http_request.LoadHeaders(reader)) return;
-        if (!http_request.LoadBody(reader)) return;
+        if (http_request.Load(reader) != HTTPRequest::State::Complete) return;
     } catch (const std::runtime_error&) {
         return;
     }
@@ -126,7 +121,10 @@ void Drain(const std::shared_ptr<FuzzClient>& client, RunResult& out)
 
         if (!req) {
             if (const HTTPRequest* cur{client->GetRequest()}) {
-                // Complete is always handed back, never left behind.
+                // TryReadRequest() returns empty if the HTTPRemoteClient is still
+                // holding on to the request. In this test, the request is guaranteed
+                // to be incomplete or failed, although in production it may be a result of
+                // a busy worker or a full send buffer.
                 assert(cur->GetState() != HTTPRequest::State::Complete);
                 assert(StateRank(cur->GetState()) >= StateRank(out.last_state));
                 out.last_state = cur->GetState();

@@ -290,10 +290,9 @@ void HTTPHeaders::Write(std::string&& key, std::string&& value)
 
 void HTTPHeaders::RemoveAll(std::string_view key)
 {
-    auto moved = std::ranges::remove_if(m_headers, [key] (auto& pair) {
+    std::erase_if(m_headers, [key] (auto& pair) {
         return CaseInsensitiveEqual(key, pair.first);
     });
-    m_headers.erase(moved.begin(), moved.end());
 }
 
 bool HTTPHeaders::Read(util::LineReader& reader, bool write)
@@ -956,7 +955,7 @@ void HTTPRemoteClient::Receive()
         m_disconnect = true;
     } else {
         // Reset idle timeout
-        m_idle_since = Now<SteadySeconds>();
+        m_idle_since = MockableSteadyClock::now();
 
         // Prevent disconnect until all requests are completely handled.
         m_connection_busy = true;
@@ -966,6 +965,16 @@ void HTTPRemoteClient::Receive()
             m_recv_buffer.end(),
             buf,
             buf + nrecv);
+
+        m_total_bytes_received += static_cast<uint64_t>(nrecv);
+        LogDebug(
+            BCLog::HTTP,
+            "Received %d bytes from %s (id=%llu): total=%llu buffered=%zu",
+            nrecv,
+            m_origin,
+            m_id,
+            m_total_bytes_received,
+            m_recv_buffer.size());
     }
 }
 
@@ -1083,55 +1092,73 @@ std::unique_ptr<HTTPRequest> HTTPRemoteClient::TryReadRequest(const std::shared_
         client->m_req = std::make_unique<HTTPRequest>(client);
     }
 
+    return client->TryReadRequestInternal();
+}
+
+std::unique_ptr<HTTPRequest> HTTPRemoteClient::TryReadRequestInternal()
+{
     try {
-        // Read data from the buffer into the current request
-        client->ReadRequest(*client->m_req);
+        if (!m_recv_buffer.empty()) {
+            // Read data from the buffer into the current request
+            LineReader reader(m_recv_buffer, MAX_HEADERS_SIZE);
+            try {
+                m_req->Load(reader);
+            } catch (...) {
+                m_recv_buffer.clear();
+                throw;
+            }
+
+            // Remove the bytes read out of the buffer.
+            m_recv_buffer.erase(
+                m_recv_buffer.begin(),
+                m_recv_buffer.begin() + reader.Consumed());
+        }
     } catch (const ContentTooLargeError& e) {
         LogDebug(
             BCLog::HTTP,
             "HTTP request body too large from client %s (id=%llu): %s",
-            client->m_origin,
-            client->m_id,
+            m_origin,
+            m_id,
             e.what());
 
-        WriteNoStoreErrorReply(*client->m_req, HTTP_CONTENT_TOO_LARGE);
-        client->m_disconnect = true;
+        WriteNoStoreErrorReply(*m_req, HTTP_CONTENT_TOO_LARGE);
+        m_disconnect = true;
         return nullptr;
     } catch (const std::runtime_error& e) {
         LogDebug(
             BCLog::HTTP,
             "Error reading HTTP request from client %s (id=%llu): %s",
-            client->m_origin,
-            client->m_id,
+            m_origin,
+            m_id,
             e.what());
 
         // We failed to read a complete request from the buffer
-        WriteNoStoreErrorReply(*client->m_req, HTTP_BAD_REQUEST);
-        client->m_disconnect = true;
+        WriteNoStoreErrorReply(*m_req, HTTP_BAD_REQUEST);
+        m_disconnect = true;
         return nullptr;
     }
 
     // If the request is ready, hand it to a worker.
-    if (client->m_req->GetState() == HTTPRequest::State::Complete) {
+    if (m_req->GetState() == HTTPRequest::State::Complete) {
         // Unless this client's send buffer is full: in that case hold the
         // parsed request here instead of moving it to a worker. This prevents
         // the server from reading any more data from this client until they
         // drain their end of the socket, and prevents the server from packing
         // more responses into the send buffer.
         const size_t buffer_used{WITH_LOCK(
-            client->m_send_mutex,
-            return client->m_send_buffer.size();)};
+            m_send_mutex,
+            return m_send_buffer.size();)};
         if (buffer_used > MAX_BODY_SIZE) return nullptr;
         LogDebug(
             BCLog::HTTP,
             "Received a %s request for %s from %s (id=%llu)",
-            RequestMethodString(client->m_req->GetRequestMethod()),
-            client->m_req->GetURI(),
-            client->m_origin,
-            client->m_id);
+            RequestMethodString(m_req->GetRequestMethod()),
+            m_req->GetURI(),
+            m_origin,
+            m_id);
 
-        client->m_req_busy = true;
-        return std::move(client->m_req);
+        m_req_busy = true;
+        return std::move(m_req);
     }
 
     return nullptr;
@@ -1139,65 +1166,56 @@ std::unique_ptr<HTTPRequest> HTTPRemoteClient::TryReadRequest(const std::shared_
 
 void HTTPServer::DisconnectClients()
 {
-    const auto now{Now<SteadySeconds>()};
-    size_t erased = std::erase_if(m_connected,
-                                  [&](auto& client) {
-                                      return client->MaybeDisconnect(now,
-                                                                     m_rpcservertimeout,
-                                                                     /*disconnect_all=*/m_disconnect_all_clients);
-                                  });
+    const auto now{MockableSteadyClock::now()};
+    size_t erased = std::erase_if(m_connected, [&](auto& client) {
+        bool disconnect{client->ShouldDisconnect(now,
+                                                 m_rpcservertimeout,
+                                                 /*disconnect_all=*/m_disconnect_all_clients)};
+        if (disconnect) {
+            LogDebug(BCLog::HTTP,
+                "Disconnecting HTTP client %s (id=%llu)",
+                client->GetOrigin(),
+                client->GetId());
+        }
+        return disconnect;
+    });
     if (erased > 0) {
         // Report back to the main thread
         m_connected_size.fetch_sub(erased, std::memory_order_relaxed);
     }
 }
 
-bool HTTPRemoteClient::MaybeDisconnect(std::chrono::time_point<SteadyClock> now, std::chrono::seconds rpcservertimeout, bool disconnect_all)
+bool HTTPRemoteClient::ShouldDisconnect(MockableSteadyClock::time_point now, std::chrono::seconds rpcservertimeout, bool disconnect_all) const
 {
-    // First check for idle timeout. We reset the timer when we send and receive data,
+    // Disconnect this client due to error or end of communication
+    // May drop unsent data if we are closing due to error.
+    if (m_disconnect) {
+        // We should already have logged the reason when we set m_disconnect.
+        return true;
+    // Check for idle timeout. We reset the timer when we send and receive data,
     // but if the server is busy handling a request we should ignore the timeout until
     // the reply is sent. If we did erase the shared_ptr<HTTPRemoteClient> reference in m_connected
     // while the server is busy with a request, it might be prematurely dropped before
     // the response has been sent, or if the HTTPRequest was holding a temporary shared_ptr
     // client on a worker thread - it would keep the socket open even after "disconnecting".
-    const bool is_idle{rpcservertimeout.count() > 0 &&
-                       now - m_idle_since.load() > rpcservertimeout &&
-                       !m_req_busy};
-
-    // Disconnect this client due to error, end of communication, or idle timeout.
-    // May drop unsent data if we are closing due to error.
-    if (m_disconnect || is_idle) {
-        if (is_idle) {
-            LogDebug(BCLog::HTTP,
-                     "HTTP client idle timeout %s (id=%llu)",
-                     m_origin,
-                     m_id);
-        }
+    } else if (rpcservertimeout.count() > 0 &&
+               now - m_idle_since.load() > rpcservertimeout &&
+               !m_req_busy) {
+        LogDebug(BCLog::HTTP,
+                 "HTTP client idle timeout %s (id=%llu)",
+                 m_origin,
+                 m_id);
+        return true;
+    // Disconnect this client because the server is shutting down and we need to
+    // disconnect all clients... Unless the client is still being handled by a
+    // worker thread, in which case we'd rather continue the I/O loop (but might
+    // not complete sending back the full response).
+    } else if (disconnect_all && !m_connection_busy) {
+        return true;
     } else {
-        // Disconnect this client because the server is shutting
-        // down and we need to disconnect all clients...
-        if (disconnect_all) {
-            // ...unless we still have data for this client.
-            if (m_connection_busy) {
-                // There is still data for this healthy-connected client.
-                // Continue the I/O loop until all data is sent or an error is encountered.
-                return false;
-            } else {
-                // This is a healthy persistent connection (e.g. keep-alive)
-                // but it's time to say goodbye.
-                ;
-            }
-        } else {
-            // No reason to disconnect.
-            return false;
-        }
+        // No reason to disconnect.
+        return false;
     }
-    // No reason NOT to disconnect, log and remove.
-    LogDebug(BCLog::HTTP,
-             "Disconnecting HTTP client %s (id=%llu)",
-             m_origin,
-             m_id);
-    return true;
 }
 
 void HTTPServer::ClearConnectedClients()
@@ -1209,47 +1227,35 @@ void HTTPServer::ClearConnectedClients()
     m_connected.clear();
 }
 
-void HTTPRemoteClient::ReadRequest(HTTPRequest& req)
+HTTPRequest::State HTTPRequest::Load(util::LineReader& reader)
 {
-    if (m_recv_buffer.empty()) return;
-
-    LineReader reader(m_recv_buffer, MAX_HEADERS_SIZE);
-
     try {
-        switch (req.GetState()) {
+        switch (m_state) {
         case HTTPRequest::State::Init:
-            if (!req.LoadControlData(reader)) break;
-            req.SetState(HTTPRequest::State::NeedsHeaders);
+            if (!LoadControlData(reader)) break;
+            m_state = HTTPRequest::State::NeedsHeaders;
             [[fallthrough]];
 
         case HTTPRequest::State::NeedsHeaders:
-            if (!req.LoadHeaders(reader)) break;
-            req.SetState(HTTPRequest::State::NeedsBody);
+            if (!LoadHeaders(reader)) break;
+            m_state = HTTPRequest::State::NeedsBody;
             [[fallthrough]];
 
         case HTTPRequest::State::NeedsBody:
-            if (!req.LoadBody(reader)) break;
-            req.SetState(HTTPRequest::State::Complete);
+            if (!LoadBody(reader)) break;
+            m_state = HTTPRequest::State::Complete;
             [[fallthrough]];
 
         case HTTPRequest::State::Complete:
-            break;
-
         case HTTPRequest::State::Error:
             break;
-        }
+        } // no default case, so the compiler can warn about missing cases
     } catch (...) {
         // Don't try to read any more data for this request
-        req.SetState(HTTPRequest::State::Error);
-        // Clear the memory allocated to this client, caller must disconnect
-        m_recv_buffer.clear();
+        m_state = HTTPRequest::State::Error;
         throw;
     }
-
-    // Remove the bytes read out of the buffer.
-    m_recv_buffer.erase(
-        m_recv_buffer.begin(),
-        m_recv_buffer.begin() + reader.Consumed());
+    return m_state;
 }
 
 bool HTTPRemoteClient::MaybeSendBytesFromBuffer()
@@ -1321,6 +1327,11 @@ bool HTTPRemoteClient::MaybeSendBytesFromBuffer()
 
             // Our work is done here
             if (!m_keep_alive) {
+                LogDebug(
+                    BCLog::HTTP,
+                    "Done sending to client without keep-alive %s (id=%llu)",
+                    m_origin,
+                    m_id);
                 m_disconnect = true;
                 // Do not attempt to read from this client.
                 return false;
@@ -1332,7 +1343,7 @@ bool HTTPRemoteClient::MaybeSendBytesFromBuffer()
         }
 
         // Finally, reset idle timeout
-        m_idle_since = Now<SteadySeconds>();
+        m_idle_since = MockableSteadyClock::now();
     }
 
     return true;

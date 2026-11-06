@@ -166,7 +166,7 @@ static int GetChainParams(const std::vector<std::string>& args, std::string& str
     UniValue result{UniValue::VOBJ};
     result.pushKV("chain", params.GetChainTypeString());
     result.pushKV("test_chain", params.IsTestChain());
-    result.pushKV("genesis", HexStr(consensus.hashGenesisBlock));
+    result.pushKV("genesis", consensus.hashGenesisBlock.GetHex());
     result.pushKV("subsidy_halving_interval", consensus.nSubsidyHalvingInterval);
 
     if (consensus.signet_blocks) {
@@ -204,6 +204,13 @@ static int GetChainParams(const std::vector<std::string>& args, std::string& str
         UniValue addr{UniValue::VOBJ};
         addr.pushKV("bech32_hrp", params.Bech32HRP());
         result.pushKV("addresses", addr);
+    }
+
+    {
+        UniValue storage{UniValue::VOBJ};
+        storage.pushKV("assumed_blockchain_gib", params.AssumedBlockchainSize());
+        storage.pushKV("assumed_chain_state_gib", params.AssumedChainStateSize());
+        result.pushKV("storage", storage);
     }
 
     strPrint = result.write(/*prettyIndent=*/2);

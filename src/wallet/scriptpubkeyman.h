@@ -147,7 +147,7 @@ public:
 
     /** Prepends the wallet name in logging output to ease debugging in multi-wallet use cases */
     template <typename... Params>
-    void WalletLogPrintf(util::ConstevalFormatString<sizeof...(Params)> wallet_fmt, const Params&... params) const
+    void WalletLogPrintf(util::log::FormatString<sizeof...(Params)> wallet_fmt, const Params&... params) const
     {
         LogInfo("[%s] %s", m_storage.LogName(), tfm::format(wallet_fmt, params...));
     };
@@ -232,7 +232,7 @@ public:
     //! Adds an encrypted key to the store, without saving it to disk (used by LoadWallet)
     bool LoadCryptedKey(const CPubKey &vchPubKey, const std::vector<unsigned char> &vchCryptedSecret, bool checksum_valid);
     //! Adds a CScript to the store
-    bool LoadCScript(const CScript& redeemScript);
+    [[nodiscard]] bool LoadCScript(const CScript& redeemScript);
     //! Load a HD chain model (used by LoadWallet)
     void LoadHDChain(const CHDChain& chain);
     void AddInactiveHDChain(const CHDChain& chain);

@@ -19,7 +19,7 @@ def rpccall(node, user, method, *, batch=False):
     url = urllib.parse.urlparse(node.url)
     headers = {"Authorization": "Basic " + str_to_b64str('{}:{}'.format(user[0], user[3]))}
     request = {"method": method}
-    conn = http.client.HTTPConnection(url.hostname, url.port)
+    conn = http.client.HTTPConnection(url.hostname, url.port, timeout=node.rpc_timeout)
     conn.connect()
     conn.request('POST', '/', json.dumps([request] if batch else request), headers)
     resp = conn.getresponse()
@@ -32,7 +32,6 @@ def get_permissions(whitelist):
 
 
 class RPCWhitelistTest(BitcoinTestFramework):
-
     def set_test_params(self):
         self.num_nodes = 1
 
@@ -99,7 +98,7 @@ class RPCWhitelistTest(BitcoinTestFramework):
         # Replace file configurations
         self.nodes[0].replace_in_config([("rpcwhitelistdefault=0", "rpcwhitelistdefault=1")])
         with open(self.nodes[0].datadir_path / "bitcoin.conf", 'a') as f:
-            f.write("rpcwhitelist=__cookie__:getblockcount,getblockchaininfo,getmempoolinfo,stop\n")
+            f.write("rpcwhitelist=__cookie__:getblockcount,getblockchaininfo,getmempoolinfo,getindexinfo,stop\n")
         self.restart_node(0)
 
         self.test_users_permissions()

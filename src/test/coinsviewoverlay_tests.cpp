@@ -23,9 +23,9 @@
 
 namespace {
 
-std::shared_ptr<ThreadPool> MakeStartedThreadPool()
+util::NotNullSharedPtr<ThreadPool> MakeStartedThreadPool()
 {
-    auto pool{std::make_shared<ThreadPool>("fetch_test")};
+    util::NotNull pool{std::make_shared<ThreadPool>("fetch_test")};
     pool->Start(DEFAULT_PREVOUTFETCH_THREADS);
     return pool;
 }
@@ -61,9 +61,13 @@ void PopulateView(const CBlock& block, CCoinsView& view, bool spent = false)
     for (const auto& tx : block.vtx | std::views::drop(1)) {
         for (const auto& in : tx->vin) {
             if (txids.contains(in.prevout.hash)) continue;
-            Coin coin{};
-            if (!spent) coin.out.nValue = 1;
-            cache.EmplaceCoinInternalDANGER(in.prevout, std::move(coin));
+            if (spent) {
+                BOOST_CHECK(cache.SpendCoin(in.prevout));
+            } else {
+                Coin coin{};
+                coin.out.nValue = 1;
+                cache.AddCoin(in.prevout, std::move(coin), /*possible_overwrite=*/true);
+            }
         }
         txids.emplace(tx->GetHash());
     }
@@ -199,7 +203,7 @@ BOOST_AUTO_TEST_CASE(access_non_input_coins)
     Coin coin{};
     coin.out.nValue = 1;
     const COutPoint outpoint{Txid::FromUint256(uint256::ZERO), 0};
-    main_cache.EmplaceCoinInternalDANGER(COutPoint{outpoint}, std::move(coin));
+    main_cache.AddCoin(outpoint, std::move(coin), /*possible_overwrite=*/true);
 
     CoinsViewOverlay view{&main_cache, MakeStartedThreadPool()};
     // The block has no non-coinbase transactions, so this fetches nothing and only creates the
@@ -283,7 +287,7 @@ BOOST_AUTO_TEST_CASE(fetch_unstarted_thread_pool)
     CCoinsViewDB db{{.path = "", .cache_bytes = 1_MiB, .memory_only = true}, {}};
     CCoinsViewCache main_cache{&db};
     PopulateView(block, main_cache);
-    auto thread_pool{std::make_shared<ThreadPool>("fetch_none")};
+    util::NotNull thread_pool{std::make_shared<ThreadPool>("fetch_none")};
     CoinsViewOverlay view{&main_cache, thread_pool};
     const auto reset_guard{view.StartFetching(block)};
     CheckCache(block, view);
@@ -297,7 +301,7 @@ BOOST_AUTO_TEST_CASE(fetch_interrupted_thread_pool_uses_normal_lookup)
     CCoinsViewCache main_cache{&db};
     PopulateView(block, main_cache);
 
-    auto thread_pool{std::make_shared<ThreadPool>("fetch_intr")};
+    util::NotNull thread_pool{std::make_shared<ThreadPool>("fetch_intr")};
     thread_pool->Start(DEFAULT_PREVOUTFETCH_THREADS);
     thread_pool->Interrupt();
     CoinsViewOverlay view{&main_cache, thread_pool};
